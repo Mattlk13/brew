@@ -1,3 +1,4 @@
+# typed: strict
 # frozen_string_literal: true
 
 require "cask/artifact/app"
@@ -18,6 +19,7 @@ require "cask/artifact/postflight_block"
 require "cask/artifact/preflight_block"
 require "cask/artifact/prefpane"
 require "cask/artifact/qlplugin"
+require "cask/artifact/mdimporter"
 require "cask/artifact/screen_saver"
 require "cask/artifact/service"
 require "cask/artifact/stage_only"
@@ -26,6 +28,9 @@ require "cask/artifact/uninstall"
 require "cask/artifact/zap"
 
 module Cask
+  # Module containing all cask artifact classes.
+  #
+  # @api private
   module Artifact
   end
 end

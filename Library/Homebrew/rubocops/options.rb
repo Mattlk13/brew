@@ -1,3 +1,4 @@
+# typed: true
 # frozen_string_literal: true
 
 require "rubocops/extend/formula"
@@ -5,7 +6,7 @@ require "rubocops/extend/formula"
 module RuboCop
   module Cop
     module FormulaAudit
-      # This cop audits `options` in Formulae.
+      # This cop audits `option`s in formulae.
       class Options < FormulaCop
         DEPRECATION_MSG = "macOS has been 64-bit only since 10.6 so 32-bit options are deprecated."
         UNI_DEPRECATION_MSG = "macOS has been 64-bit only since 10.6 so universal options are deprecated."
@@ -18,11 +19,9 @@ module RuboCop
           option_call_nodes.each do |option_call|
             option = parameters(option_call).first
             problem DEPRECATION_MSG if regex_match_group(option, /32-bit/)
-          end
 
-          option_call_nodes.each do |option_call|
             offending_node(option_call)
-            option = string_content(parameters(option_call).first)
+            option = string_content(option)
             problem UNI_DEPRECATION_MSG if option == "universal"
 
             if option !~ /with(out)?-/ &&
@@ -39,18 +38,11 @@ module RuboCop
                     " Migrate '--#{option}' with `deprecated_option`."
           end
 
-          return unless formula_tap == "homebrew-core"
+          return if formula_tap != "homebrew-core"
 
           problem DEP_OPTION if method_called_ever?(body_node, :deprecated_option)
           problem OPTION if method_called_ever?(body_node, :option)
         end
-      end
-    end
-
-    # Keep this (empty) module and class around in case we need it later to
-    # avoid deleting all the NewFormulaAudit referencing logic.
-    module NewFormulaAudit
-      class Options < FormulaCop
       end
     end
   end

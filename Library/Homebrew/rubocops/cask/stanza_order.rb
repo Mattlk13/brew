@@ -1,3 +1,4 @@
+# typed: true
 # frozen_string_literal: true
 
 require "forwardable"
@@ -6,10 +7,10 @@ module RuboCop
   module Cop
     module Cask
       # This cop checks that a cask's stanzas are ordered correctly.
-      # See https://github.com/Homebrew/homebrew-cask/blob/master/CONTRIBUTING.md#stanza-order
-      # for more info.
-      class StanzaOrder < Cop
+      # @see https://docs.brew.sh/Cask-Cookbook#stanza-order
+      class StanzaOrder < Base
         extend Forwardable
+        extend AutoCorrector
         include CaskHelp
 
         MESSAGE = "`%<stanza>s` stanza out of order"
@@ -19,26 +20,22 @@ module RuboCop
           add_offenses
         end
 
-        def autocorrect(stanza)
-          lambda do |corrector|
-            correct_stanza_index = toplevel_stanzas.index(stanza)
-            correct_stanza = sorted_toplevel_stanzas[correct_stanza_index]
-            corrector.replace(stanza.source_range_with_comments,
-                              correct_stanza.source_with_comments)
-          end
-        end
-
         private
 
         attr_reader :cask_block
+
         def_delegators :cask_block, :cask_node, :toplevel_stanzas,
                        :sorted_toplevel_stanzas
 
         def add_offenses
           offending_stanzas.each do |stanza|
             message = format(MESSAGE, stanza: stanza.stanza_name)
-            add_offense(stanza, location: stanza.source_range_with_comments,
-                                message:  message)
+            add_offense(stanza.source_range_with_comments, message: message) do |corrector|
+              correct_stanza_index = toplevel_stanzas.index(stanza)
+              correct_stanza = sorted_toplevel_stanzas[correct_stanza_index]
+              corrector.replace(stanza.source_range_with_comments,
+                                correct_stanza.source_with_comments)
+            end
           end
         end
 
