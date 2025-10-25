@@ -1,219 +1,186 @@
+# typed: strict
 # frozen_string_literal: true
-
-require "ostruct"
 
 module Homebrew
   module CLI
-    class Args < OpenStruct
-      attr_reader :processed_options, :args_parsed
-      # undefine tap to allow --tap argument
-      undef tap
+    class Args
+      # Represents a processed option. The array elements are:
+      #   0: short option name (e.g. "-d")
+      #   1: long option name (e.g. "--debug")
+      #   2: option description (e.g. "Print debugging information")
+      #   3: whether the option is hidden
+      OptionsType = T.type_alias { T::Array[[T.nilable(String), T.nilable(String), String, T::Boolean]] }
 
-      def initialize(argv:)
-        super
-        @argv = argv
-        @args_parsed = false
-        @processed_options = []
+      sig { returns(T::Array[String]) }
+      attr_reader :options_only, :flags_only, :remaining
+
+      sig { void }
+      def initialize
+        require "cli/named_args"
+
+        @cli_args = T.let(nil, T.nilable(T::Array[String]))
+        @processed_options = T.let([], OptionsType)
+        @options_only = T.let([], T::Array[String])
+        @flags_only = T.let([], T::Array[String])
+        @cask_options = T.let(false, T::Boolean)
+        @table = T.let({}, T::Hash[Symbol, T.untyped])
+
+        # Can set these because they will be overwritten by freeze_named_args!
+        # (whereas other values below will only be overwritten if passed).
+        @named = T.let(NamedArgs.new(parent: self), T.nilable(NamedArgs))
+        @remaining = T.let([], T::Array[String])
       end
 
+      sig { params(remaining_args: T::Array[T.any(T::Array[String], String)]).void }
+      def freeze_remaining_args!(remaining_args) = @remaining.replace(remaining_args).freeze
+
+      sig { params(named_args: T::Array[String], cask_options: T::Boolean, without_api: T::Boolean).void }
+      def freeze_named_args!(named_args, cask_options:, without_api:)
+        @named = T.let(
+          NamedArgs.new(
+            *named_args.freeze,
+            cask_options:,
+            flags:         flags_only,
+            force_bottle:  @table[:force_bottle?] || false,
+            override_spec: @table[:HEAD?] ? :head : nil,
+            parent:        self,
+            without_api:,
+          ),
+          T.nilable(NamedArgs),
+        )
+      end
+
+      sig { params(name: Symbol, value: T.untyped).void }
+      def set_arg(name, value)
+        @table[name] = value
+      end
+
+      sig { override.params(_blk: T.nilable(T.proc.params(x: T.untyped).void)).returns(T.untyped) }
+      def tap(&_blk)
+        return super if block_given? # Object#tap
+
+        @table[:tap]
+      end
+
+      sig { params(processed_options: OptionsType).void }
       def freeze_processed_options!(processed_options)
+        # Reset cache values reliant on processed_options
+        @cli_args = nil
+
         @processed_options += processed_options
         @processed_options.freeze
-        @args_parsed = true
+
+        @options_only = cli_args.select { _1.start_with?("-") }.freeze
+        @flags_only = cli_args.select { _1.start_with?("--") }.freeze
       end
 
+      sig { returns(NamedArgs) }
+      def named
+        require "formula"
+        T.must(@named)
+      end
+
+      sig { returns(T::Boolean) }
+      def no_named? = named.empty?
+
+      sig { returns(T::Array[String]) }
+      def build_from_source_formulae
+        if @table[:build_from_source?] || @table[:HEAD?] || @table[:build_bottle?]
+          named.to_formulae.map(&:full_name)
+        else
+          []
+        end
+      end
+
+      sig { returns(T::Array[String]) }
+      def include_test_formulae
+        if @table[:include_test?]
+          named.to_formulae.map(&:full_name)
+        else
+          []
+        end
+      end
+
+      sig { params(name: String).returns(T.nilable(String)) }
+      def value(name)
+        arg_prefix = "--#{name}="
+        flag_with_value = flags_only.find { |arg| arg.start_with?(arg_prefix) }
+        return unless flag_with_value
+
+        flag_with_value.delete_prefix(arg_prefix)
+      end
+
+      sig { returns(Context::ContextStruct) }
+      def context
+        Context::ContextStruct.new(debug: debug?, quiet: quiet?, verbose: verbose?)
+      end
+
+      sig { returns(T.nilable(Symbol)) }
+      def only_formula_or_cask
+        if @table[:formula?] && !@table[:cask?]
+          :formula
+        elsif @table[:cask?] && !@table[:formula?]
+          :cask
+        end
+      end
+
+      sig { returns(T::Array[[Symbol, Symbol]]) }
+      def os_arch_combinations
+        skip_invalid_combinations = false
+
+        oses = case (os_sym = @table[:os]&.to_sym)
+        when nil
+          [SimulateSystem.current_os]
+        when :all
+          skip_invalid_combinations = true
+
+          OnSystem::ALL_OS_OPTIONS
+        else
+          [os_sym]
+        end
+
+        arches = case (arch_sym = @table[:arch]&.to_sym)
+        when nil
+          [SimulateSystem.current_arch]
+        when :all
+          skip_invalid_combinations = true
+          OnSystem::ARCH_OPTIONS
+        else
+          [arch_sym]
+        end
+
+        oses.product(arches).select do |os, arch|
+          if skip_invalid_combinations
+            bottle_tag = Utils::Bottles::Tag.new(system: os, arch:)
+            bottle_tag.valid_combination?
+          else
+            true
+          end
+        end
+      end
+
+      private
+
+      sig { params(option: String).returns(String) }
       def option_to_name(option)
         option.sub(/\A--?/, "")
               .tr("-", "_")
       end
 
+      sig { returns(T::Array[String]) }
       def cli_args
-        return @cli_args if @cli_args
-
-        @cli_args = []
-        processed_options.each do |short, long|
-          option = long || short
-          switch = "#{option_to_name(option)}?".to_sym
+        @cli_args ||= @processed_options.filter_map do |short, long|
+          option = T.must(long || short)
+          switch = :"#{option_to_name(option)}?"
           flag = option_to_name(option).to_sym
           if @table[switch] == true || @table[flag] == true
-            @cli_args << option
+            option
           elsif @table[flag].instance_of? String
-            @cli_args << option + "=" + @table[flag]
+            "#{option}=#{@table[flag]}"
           elsif @table[flag].instance_of? Array
-            @cli_args << option + "=" + @table[flag].join(",")
+            "#{option}=#{@table[flag].join(",")}"
           end
-        end
-        @cli_args
-      end
-
-      def options_only
-        @options_only ||= cli_args.select { |arg| arg.start_with?("-") }
-      end
-
-      def flags_only
-        @flags_only ||= cli_args.select { |arg| arg.start_with?("--") }
-      end
-
-      def passthrough
-        options_only - CLI::Parser.global_options.values.map(&:first).flatten
-      end
-
-      def named
-        return [] if remaining.nil?
-
-        remaining
-      end
-
-      def no_named?
-        named.blank?
-      end
-
-      # If the user passes any flags that trigger building over installing from
-      # a bottle, they are collected here and returned as an Array for checking.
-      def collect_build_args
-        build_flags = []
-
-        build_flags << "--HEAD" if head
-        build_flags << "--universal" if build_universal
-        build_flags << "--build-bottle" if build_bottle
-        build_flags << "--build-from-source" if build_from_source
-
-        build_flags
-      end
-
-      def formulae
-        require "formula"
-        @formulae ||= (downcased_unique_named - casks).map do |name|
-          if name.include?("/") || File.exist?(name)
-            Formulary.factory(name, spec)
-          else
-            Formulary.find_with_priority(name, spec)
-          end
-        end.uniq(&:name)
-      end
-
-      def resolved_formulae
-        require "formula"
-        @resolved_formulae ||= (downcased_unique_named - casks).map do |name|
-          Formulary.resolve(name, spec: spec(nil))
-        end.uniq(&:name)
-      end
-
-      def casks
-        @casks ||= downcased_unique_named.grep HOMEBREW_CASK_TAP_CASK_REGEX
-      end
-
-      def kegs
-        require "keg"
-        require "formula"
-        require "missing_formula"
-        @kegs ||= downcased_unique_named.map do |name|
-          raise UsageError if name.empty?
-
-          rack = Formulary.to_rack(name.downcase)
-
-          dirs = rack.directory? ? rack.subdirs : []
-
-          if dirs.empty?
-            if (reason = Homebrew::MissingFormula.suggest_command(name, "uninstall"))
-              $stderr.puts reason
-            end
-            raise NoSuchKegError, rack.basename
-          end
-
-          linked_keg_ref = HOMEBREW_LINKED_KEGS/rack.basename
-          opt_prefix = HOMEBREW_PREFIX/"opt/#{rack.basename}"
-
-          begin
-            if opt_prefix.symlink? && opt_prefix.directory?
-              Keg.new(opt_prefix.resolved_path)
-            elsif linked_keg_ref.symlink? && linked_keg_ref.directory?
-              Keg.new(linked_keg_ref.resolved_path)
-            elsif dirs.length == 1
-              Keg.new(dirs.first)
-            else
-              f = if name.include?("/") || File.exist?(name)
-                Formulary.factory(name)
-              else
-                Formulary.from_rack(rack)
-              end
-
-              unless (prefix = f.installed_prefix).directory?
-                raise MultipleVersionsInstalledError, rack.basename
-              end
-
-              Keg.new(prefix)
-            end
-          rescue FormulaUnavailableError
-            raise <<~EOS
-              Multiple kegs installed to #{rack}
-              However we don't know which one you refer to.
-              Please delete (with rm -rf!) all but one and then try again.
-            EOS
-          end
-        end
-      end
-
-      def build_stable?
-        !(HEAD? || devel?)
-      end
-
-      private
-
-      def downcased_unique_named
-        # Only lowercase names, not paths, bottle filenames or URLs
-        arguments = if args_parsed
-          named
-        else
-          cmdline_args.reject { |arg| arg.start_with?("-") }
-        end
-        arguments.map do |arg|
-          if arg.include?("/") || arg.end_with?(".tar.gz") || File.exist?(arg)
-            arg
-          else
-            arg.downcase
-          end
-        end.uniq
-      end
-
-      def head
-        return true if args_parsed && HEAD?
-
-        cmdline_args.include?("--HEAD")
-      end
-
-      def devel
-        return true if args_parsed && devel?
-
-        cmdline_args.include?("--devel")
-      end
-
-      def build_universal
-        return true if args_parsed && universal?
-
-        cmdline_args.include?("--universal")
-      end
-
-      def build_bottle
-        return true if args_parsed && build_bottle?
-
-        cmdline_args.include?("--build-bottle")
-      end
-
-      def build_from_source
-        return true if args_parsed && (build_from_source? || s?)
-
-        cmdline_args.include?("--build-from-source") || cmdline_args.include?("-s")
-      end
-
-      def spec(default = :stable)
-        if head
-          :head
-        elsif devel
-          :devel
-        else
-          default
-        end
+        end.freeze
       end
     end
   end

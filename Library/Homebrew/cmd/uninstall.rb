@@ -1,168 +1,88 @@
+# typed: strict
 # frozen_string_literal: true
 
+require "abstract_command"
 require "keg"
 require "formula"
 require "diagnostic"
 require "migrator"
-require "cli/parser"
+require "cask/cask_loader"
+require "cask/exceptions"
+require "cask/installer"
+require "cask/uninstall"
+require "uninstall"
 
 module Homebrew
-  module_function
+  module Cmd
+    class UninstallCmd < AbstractCommand
+      cmd_args do
+        description <<~EOS
+          Uninstall a <formula> or <cask>.
+        EOS
+        switch "-f", "--force",
+               description: "Delete all installed versions of <formula>. Uninstall even if <cask> is not " \
+                            "installed, overwrite existing files and ignore errors when removing files."
+        switch "--zap",
+               description: "Remove all files associated with a <cask>. " \
+                            "*May remove files which are shared between applications.*"
+        switch "--ignore-dependencies",
+               description: "Don't fail uninstall, even if <formula> is a dependency of any installed " \
+                            "formulae."
+        switch "--formula", "--formulae",
+               description: "Treat all named arguments as formulae."
+        switch "--cask", "--casks",
+               description: "Treat all named arguments as casks."
 
-  def uninstall_args
-    Homebrew::CLI::Parser.new do
-      usage_banner <<~EOS
-        `uninstall`, `rm`, `remove` [<options>] <formula>
+        conflicts "--formula", "--cask"
+        conflicts "--formula", "--zap"
 
-        Uninstall <formula>.
-      EOS
-      switch :force,
-             description: "Delete all installed versions of <formula>."
-      switch "--ignore-dependencies",
-             description: "Don't fail uninstall, even if <formula> is a dependency of any installed "\
-                          "formulae."
-      switch :debug
-      min_named :formula
-    end
-  end
+        named_args [:installed_formula, :installed_cask], min: 1
+      end
 
-  def uninstall
-    uninstall_args.parse
+      sig { override.void }
+      def run
+        all_kegs, casks = args.named.to_kegs_to_casks(
+          ignore_unavailable: args.force?,
+          all_kegs:           args.force?,
+        )
 
-    kegs_by_rack = if args.force?
-      Hash[args.named.map do |name|
-        rack = Formulary.to_rack(name)
-        next unless rack.directory?
+        # If ignore_unavailable is true and the named args
+        # are a series of invalid kegs and casks,
+        # #to_kegs_to_casks will return empty arrays.
+        return if all_kegs.blank? && casks.blank?
 
-        [rack, rack.subdirs.map { |d| Keg.new(d) }]
-      end]
-    else
-      args.kegs.group_by(&:rack)
-    end
+        kegs_by_rack = all_kegs.group_by(&:rack)
 
-    handle_unsatisfied_dependents(kegs_by_rack)
-    return if Homebrew.failed?
+        Uninstall.uninstall_kegs(
+          kegs_by_rack,
+          casks:,
+          force:               args.force?,
+          ignore_dependencies: args.ignore_dependencies?,
+          named_args:          args.named,
+        )
 
-    kegs_by_rack.each do |rack, kegs|
-      if args.force?
-        name = rack.basename
+        if args.zap?
+          casks.each do |cask|
+            odebug "Zapping Cask #{cask}"
 
-        if rack.directory?
-          puts "Uninstalling #{name}... (#{rack.abv})"
-          kegs.each do |keg|
-            keg.unlink
-            keg.uninstall
+            raise Cask::CaskNotInstalledError, cask if !cask.installed? && !args.force?
+
+            Cask::Installer.new(cask, verbose: args.verbose?, force: args.force?).zap
           end
+        else
+          Cask::Uninstall.uninstall_casks(
+            *casks,
+            verbose: args.verbose?,
+            force:   args.force?,
+          )
         end
 
-        rm_pin rack
-      else
-        kegs.each do |keg|
-          begin
-            f = Formulary.from_rack(rack)
-            if f.pinned?
-              onoe "#{f.full_name} is pinned. You must unpin it to uninstall."
-              next
-            end
-          rescue
-            nil
-          end
-
-          keg.lock do
-            puts "Uninstalling #{keg}... (#{keg.abv})"
-            keg.unlink
-            keg.uninstall
-            rack = keg.rack
-            rm_pin rack
-
-            if rack.directory?
-              versions = rack.subdirs.map(&:basename)
-              puts "#{keg.name} #{versions.to_sentence} #{"is".pluralize(versions.count)} still installed."
-              puts "Run `brew uninstall --force #{keg.name}` to remove all versions."
-            end
-          end
+        if ENV["HOMEBREW_AUTOREMOVE"].present?
+          opoo "`$HOMEBREW_AUTOREMOVE` is now a no-op as it is the default behaviour. " \
+               "Set `HOMEBREW_NO_AUTOREMOVE=1` to disable it."
         end
+        Cleanup.autoremove unless Homebrew::EnvConfig.no_autoremove?
       end
     end
-  rescue MultipleVersionsInstalledError => e
-    ofail e
-    puts "Run `brew uninstall --force #{e.name}` to remove all versions."
-  ensure
-    # If we delete Cellar/newname, then Cellar/oldname symlink
-    # can become broken and we have to remove it.
-    if HOMEBREW_CELLAR.directory?
-      HOMEBREW_CELLAR.children.each do |rack|
-        rack.unlink if rack.symlink? && !rack.resolved_path_exists?
-      end
-    end
-  end
-
-  def handle_unsatisfied_dependents(kegs_by_rack)
-    return if args.ignore_dependencies?
-
-    all_kegs = kegs_by_rack.values.flatten(1)
-    check_for_dependents all_kegs
-  rescue MethodDeprecatedError
-    # Silently ignore deprecations when uninstalling.
-    nil
-  end
-
-  def check_for_dependents(kegs)
-    return false unless result = Keg.find_some_installed_dependents(kegs)
-
-    if ARGV.homebrew_developer?
-      DeveloperDependentsMessage.new(*result).output
-    else
-      NondeveloperDependentsMessage.new(*result).output
-    end
-
-    true
-  end
-
-  class DependentsMessage
-    attr_reader :reqs, :deps
-
-    def initialize(requireds, dependents)
-      @reqs = requireds
-      @deps = dependents
-    end
-
-    protected
-
-    def sample_command
-      "brew uninstall --ignore-dependencies #{Array(Homebrew.args.named).join(" ")}"
-    end
-
-    def are_required_by_deps
-      "#{"is".pluralize(reqs.count)} required by #{deps.to_sentence}, " \
-      "which #{"is".pluralize(deps.count)} currently installed"
-    end
-  end
-
-  class DeveloperDependentsMessage < DependentsMessage
-    def output
-      opoo <<~EOS
-        #{reqs.to_sentence} #{are_required_by_deps}.
-        You can silence this warning with:
-          #{sample_command}
-      EOS
-    end
-  end
-
-  class NondeveloperDependentsMessage < DependentsMessage
-    def output
-      ofail <<~EOS
-        Refusing to uninstall #{reqs.to_sentence}
-        because #{"it".pluralize(reqs.count)} #{are_required_by_deps}.
-        You can override this and force removal with:
-          #{sample_command}
-      EOS
-    end
-  end
-
-  def rm_pin(rack)
-    Formulary.from_rack(rack).unpin
-  rescue
-    nil
   end
 end

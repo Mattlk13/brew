@@ -5,12 +5,26 @@ require "cleanup"
 require "cask/cache"
 require "fileutils"
 
-using CleanupRefinement
+RSpec.describe Homebrew::Cleanup do
+  subject(:cleanup) { described_class.new }
 
-describe CleanupRefinement do
+  let(:ds_store) { Pathname.new("#{HOMEBREW_CELLAR}/.DS_Store") }
+  let(:lock_file) { Pathname.new("#{HOMEBREW_LOCKS}/foo") }
+
+  around do |example|
+    FileUtils.touch ds_store
+    FileUtils.touch lock_file
+    FileUtils.mkdir_p HOMEBREW_LIBRARY/"Homebrew/vendor"
+    FileUtils.touch HOMEBREW_LIBRARY/"Homebrew/vendor/portable-ruby-version"
+
+    example.run
+  ensure
+    FileUtils.rm_f ds_store
+    FileUtils.rm_f lock_file
+    FileUtils.rm_rf HOMEBREW_LIBRARY/"Homebrew"
+  end
+
   describe "::prune?" do
-    alias_matcher :be_pruned, :be_prune
-
     subject(:path) { HOMEBREW_CACHE/"foo" }
 
     before do
@@ -18,34 +32,19 @@ describe CleanupRefinement do
     end
 
     it "returns true when ctime and mtime < days_default" do
-      allow_any_instance_of(Pathname).to receive(:ctime).and_return(2.days.ago)
-      allow_any_instance_of(Pathname).to receive(:mtime).and_return(2.days.ago)
-      expect(path.prune?(1)).to be true
+      allow_any_instance_of(Pathname).to receive(:ctime).and_return((DateTime.now - 2).to_time)
+      allow_any_instance_of(Pathname).to receive(:mtime).and_return((DateTime.now - 2).to_time)
+      expect(described_class.prune?(path, 1)).to be true
     end
 
     it "returns false when ctime and mtime >= days_default" do
-      expect(path.prune?(2)).to be false
+      expect(described_class.prune?(path, 2)).to be false
     end
-  end
-end
-
-describe Homebrew::Cleanup do
-  let(:ds_store) { Pathname.new("#{HOMEBREW_CELLAR}/.DS_Store") }
-  let(:lock_file) { Pathname.new("#{HOMEBREW_LOCKS}/foo") }
-
-  around do |example|
-    FileUtils.touch ds_store
-    FileUtils.touch lock_file
-
-    example.run
-  ensure
-    FileUtils.rm_f ds_store
-    FileUtils.rm_f lock_file
   end
 
   describe "::cleanup" do
     it "removes .DS_Store and lock files" do
-      subject.clean!
+      cleanup.clean!
 
       expect(ds_store).not_to exist
       expect(lock_file).not_to exist
@@ -61,17 +60,17 @@ describe Homebrew::Cleanup do
     it "doesn't remove the lock file if it is locked" do
       lock_file.open(File::RDWR | File::CREAT).flock(File::LOCK_EX | File::LOCK_NB)
 
-      subject.clean!
+      cleanup.clean!
 
       expect(lock_file).to exist
     end
 
     context "when it can't remove a keg" do
-      let(:f1) { Class.new(Testball) { version "0.1" }.new }
-      let(:f2) { Class.new(Testball) { version "0.2" }.new }
+      let(:formula_zero_dot_one) { Class.new(Testball) { version "0.1" }.new }
+      let(:formula_zero_dot_two) { Class.new(Testball) { version "0.2" }.new }
 
       before do
-        [f1, f2].each do |f|
+        [formula_zero_dot_one, formula_zero_dot_two].each do |f|
           f.brew do
             f.install
           end
@@ -85,14 +84,98 @@ describe Homebrew::Cleanup do
       end
 
       it "doesn't remove any kegs" do
-        subject.cleanup_formula f2
-        expect(f1.installed_kegs.size).to eq(2)
+        cleanup.cleanup_formula formula_zero_dot_one
+        expect(formula_zero_dot_one.installed_kegs.size).to eq(2)
       end
 
       it "lists the unremovable kegs" do
-        subject.cleanup_formula f2
-        expect(subject.unremovable_kegs).to contain_exactly(f1.installed_kegs[0])
+        cleanup.cleanup_formula formula_zero_dot_two
+        expect(cleanup.unremovable_kegs).to contain_exactly(formula_zero_dot_one.installed_kegs[0])
       end
+    end
+  end
+
+  describe "::prune_prefix_symlinks_and_directories" do
+    let(:lib) { HOMEBREW_PREFIX/"lib" }
+
+    before do
+      lib.mkpath
+    end
+
+    it "keeps required empty directories" do
+      cleanup.prune_prefix_symlinks_and_directories
+      expect(lib).to exist
+      expect(lib.children).to be_empty
+    end
+
+    it "removes broken symlinks" do
+      FileUtils.ln_s lib/"foo", lib/"bar"
+      FileUtils.touch lib/"baz"
+
+      cleanup.prune_prefix_symlinks_and_directories
+      expect(lib).to exist
+      expect(lib.children).to eq([lib/"baz"])
+    end
+
+    it "removes empty directories" do
+      dir = lib/"test"
+      dir.mkpath
+      file = lib/"keep/file"
+      file.dirname.mkpath
+      FileUtils.touch file
+
+      cleanup.prune_prefix_symlinks_and_directories
+      expect(dir).not_to exist
+      expect(file).to exist
+    end
+
+    context "when nested directories exist with only broken symlinks" do
+      let(:dir) { HOMEBREW_PREFIX/"lib/foo" }
+      let(:child_dir) { dir/"bar" }
+      let(:grandchild_dir) { child_dir/"baz" }
+      let(:broken_link) { dir/"broken" }
+      let(:link_to_broken_link) { child_dir/"another-broken" }
+
+      before do
+        grandchild_dir.mkpath
+        FileUtils.ln_s dir/"missing", broken_link
+        FileUtils.ln_s broken_link, link_to_broken_link
+      end
+
+      it "removes broken symlinks and resulting empty directories" do
+        cleanup.prune_prefix_symlinks_and_directories
+        expect(dir).not_to exist
+      end
+
+      it "doesn't remove anything and only prints removal steps if `dry_run` is true" do
+        expect do
+          described_class.new(dry_run: true).prune_prefix_symlinks_and_directories
+        end.to output(<<~EOS).to_stdout
+          Would remove (broken link): #{link_to_broken_link}
+          Would remove (broken link): #{broken_link}
+          Would remove (empty directory): #{grandchild_dir}
+          Would remove (empty directory): #{child_dir}
+          Would remove (empty directory): #{dir}
+        EOS
+
+        expect(broken_link).to be_a_symlink
+        expect(link_to_broken_link).to be_a_symlink
+        expect(grandchild_dir).to exist
+      end
+    end
+
+    it "removes broken symlinks for uninstalled migrated Casks" do
+      caskroom = Cask::Caskroom.path
+      old_cask_dir = caskroom/"old"
+      new_cask_dir = caskroom/"new"
+      unrelated_cask_dir = caskroom/"other"
+      unrelated_cask_dir.mkpath
+      FileUtils.ln_s new_cask_dir, old_cask_dir
+
+      cleanup.prune_prefix_symlinks_and_directories
+      expect(unrelated_cask_dir).to exist
+      expect(old_cask_dir).not_to be_a_symlink
+      expect(old_cask_dir).not_to exist
     end
   end
 
@@ -129,7 +212,7 @@ describe Homebrew::Cleanup do
     expect(f3).to be_latest_version_installed
     expect(f4).to be_latest_version_installed
 
-    subject.cleanup_formula f3
+    cleanup.cleanup_formula f3
 
     expect(f1).not_to be_latest_version_installed
     expect(f2).not_to be_latest_version_installed
@@ -150,7 +233,7 @@ describe Homebrew::Cleanup do
 
         FileUtils.touch download
 
-        subject.cleanup_cask(cask)
+        cleanup.cleanup_cask(cask)
 
         expect(download).not_to exist
       end
@@ -160,21 +243,21 @@ describe Homebrew::Cleanup do
 
         FileUtils.touch download
 
-        subject.cleanup_cask(cask)
+        cleanup.cleanup_cask(cask)
 
         expect(download).to exist
       end
     end
 
     context "when given a `:latest` cask" do
-      let(:cask) { Cask::CaskLoader.load("latest-with-appcast") }
+      let(:cask) { Cask::CaskLoader.load("latest") }
 
       it "does not remove the download for the latest version" do
         download = Cask::Cache.path/"#{cask.token}--#{cask.version}"
 
         FileUtils.touch download
 
-        subject.cleanup_cask(cask)
+        cleanup.cleanup_cask(cask)
 
         expect(download).to exist
       end
@@ -182,10 +265,10 @@ describe Homebrew::Cleanup do
       it "removes the download for the latest version after 30 days" do
         download = Cask::Cache.path/"#{cask.token}--#{cask.version}"
 
-        allow(download).to receive(:ctime).and_return(30.days.ago - 1.hour)
-        allow(download).to receive(:mtime).and_return(30.days.ago - 1.hour)
+        allow(download).to receive_messages(ctime: (DateTime.now - 30).to_time - (60 * 60),
+                                            mtime: (DateTime.now - 30).to_time - (60 * 60))
 
-        subject.cleanup_cask(cask)
+        cleanup.cleanup_cask(cask)
 
         expect(download).not_to exist
       end
@@ -205,16 +288,16 @@ describe Homebrew::Cleanup do
     end
 
     it "cleans up logs if older than 30 days" do
-      allow_any_instance_of(Pathname).to receive(:ctime).and_return(31.days.ago)
-      allow_any_instance_of(Pathname).to receive(:mtime).and_return(31.days.ago)
-      subject.cleanup_logs
+      allow_any_instance_of(Pathname).to receive(:ctime).and_return((DateTime.now - 31).to_time)
+      allow_any_instance_of(Pathname).to receive(:mtime).and_return((DateTime.now - 31).to_time)
+      cleanup.cleanup_logs
       expect(path).not_to exist
     end
 
     it "does not clean up logs less than 30 days old" do
-      allow_any_instance_of(Pathname).to receive(:ctime).and_return(15.days.ago)
-      allow_any_instance_of(Pathname).to receive(:mtime).and_return(15.days.ago)
-      subject.cleanup_logs
+      allow_any_instance_of(Pathname).to receive(:ctime).and_return((DateTime.now - 15).to_time)
+      allow_any_instance_of(Pathname).to receive(:mtime).and_return((DateTime.now - 15).to_time)
+      cleanup.cleanup_logs
       expect(path).to exist
     end
   end
@@ -224,7 +307,7 @@ describe Homebrew::Cleanup do
       incomplete = (HOMEBREW_CACHE/"something.incomplete")
       incomplete.mkpath
 
-      subject.cleanup_cache
+      cleanup.cleanup_cache
 
       expect(incomplete).not_to exist
     end
@@ -233,7 +316,7 @@ describe Homebrew::Cleanup do
       cargo_cache = (HOMEBREW_CACHE/"cargo_cache")
       cargo_cache.mkpath
 
-      subject.cleanup_cache
+      cleanup.cleanup_cache
 
       expect(cargo_cache).not_to exist
     end
@@ -242,7 +325,7 @@ describe Homebrew::Cleanup do
       go_cache = (HOMEBREW_CACHE/"go_cache")
       go_cache.mkpath
 
-      subject.cleanup_cache
+      cleanup.cleanup_cache
 
       expect(go_cache).not_to exist
     end
@@ -251,7 +334,7 @@ describe Homebrew::Cleanup do
       glide_home = (HOMEBREW_CACHE/"glide_home")
       glide_home.mkpath
 
-      subject.cleanup_cache
+      cleanup.cleanup_cache
 
       expect(glide_home).not_to exist
     end
@@ -260,7 +343,7 @@ describe Homebrew::Cleanup do
       java_cache = (HOMEBREW_CACHE/"java_cache")
       java_cache.mkpath
 
-      subject.cleanup_cache
+      cleanup.cleanup_cache
 
       expect(java_cache).not_to exist
     end
@@ -269,7 +352,7 @@ describe Homebrew::Cleanup do
       npm_cache = (HOMEBREW_CACHE/"npm_cache")
       npm_cache.mkpath
 
-      subject.cleanup_cache
+      cleanup.cleanup_cache
 
       expect(npm_cache).not_to exist
     end
@@ -278,7 +361,7 @@ describe Homebrew::Cleanup do
       gclient_cache = (HOMEBREW_CACHE/"gclient_cache")
       gclient_cache.mkpath
 
-      subject.cleanup_cache
+      cleanup.cleanup_cache
 
       expect(gclient_cache).not_to exist
     end
@@ -311,8 +394,8 @@ describe Homebrew::Cleanup do
     it "cleans up VCS checkout directories with modified time < prune time" do
       foo = (HOMEBREW_CACHE/"--foo")
       foo.mkpath
-      allow_any_instance_of(Pathname).to receive(:ctime).and_return(Time.now - 2 * 60 * 60 * 24)
-      allow_any_instance_of(Pathname).to receive(:mtime).and_return(Time.now - 2 * 60 * 60 * 24)
+      allow_any_instance_of(Pathname).to receive(:ctime).and_return(Time.now - (2 * 60 * 60 * 24))
+      allow_any_instance_of(Pathname).to receive(:mtime).and_return(Time.now - (2 * 60 * 60 * 24))
       described_class.new(days: 1).cleanup_cache
       expect(foo).not_to exist
     end
@@ -324,7 +407,7 @@ describe Homebrew::Cleanup do
       expect(foo).to exist
     end
 
-    context "cleans old files in HOMEBREW_CACHE" do
+    context "when cleaning old files in HOMEBREW_CACHE" do
       let(:bottle) { (HOMEBREW_CACHE/"testball--0.0.1.tag.bottle.tar.gz") }
       let(:testball) { (HOMEBREW_CACHE/"testball--0.0.1") }
       let(:testball_resource) { (HOMEBREW_CACHE/"testball--rsrc--0.0.1.txt") }
@@ -334,12 +417,14 @@ describe Homebrew::Cleanup do
         FileUtils.touch testball
         FileUtils.touch testball_resource
         (HOMEBREW_CELLAR/"testball"/"0.0.1").mkpath
-        FileUtils.touch(CoreTap.instance.formula_dir/"testball.rb")
+        # Create the latest version of testball so the older version is eligible for cleanup.
+        (HOMEBREW_CELLAR/"testball"/"0.1/bin").mkpath
+        FileUtils.touch(CoreTap.instance.new_formula_path("testball"))
       end
 
       it "cleans up file if outdated" do
         allow(Utils::Bottles).to receive(:file_outdated?).with(any_args).and_return(true)
-        subject.cleanup_cache
+        cleanup.cleanup_cache
         expect(bottle).not_to exist
         expect(testball).not_to exist
         expect(testball_resource).not_to exist
@@ -353,11 +438,48 @@ describe Homebrew::Cleanup do
       end
 
       it "cleans up file if stale" do
-        subject.cleanup_cache
+        cleanup.cleanup_cache
         expect(bottle).not_to exist
         expect(testball).not_to exist
         expect(testball_resource).not_to exist
       end
+    end
+  end
+
+  describe "::cleanup_python_site_packages" do
+    context "when cleaning up Python modules" do
+      let(:foo_module) { (HOMEBREW_PREFIX/"lib/python3.99/site-packages/foo") }
+      let(:foo_pycache) { (foo_module/"__pycache__") }
+      let(:foo_pyc) { (foo_pycache/"foo.cypthon-399.pyc") }
+
+      before do
+        foo_pycache.mkpath
+        FileUtils.touch foo_pyc
+      end
+
+      it "cleans up stray `*.pyc` files" do
+        cleanup.cleanup_python_site_packages
+        expect(foo_pyc).not_to exist
+      end
+
+      it "retains `*.pyc` files of installed modules" do
+        FileUtils.touch foo_module/"__init__.py"
+
+        cleanup.cleanup_python_site_packages
+        expect(foo_pyc).to exist
+      end
+    end
+
+    it "cleans up stale `*.pyc` files in the top-level `__pycache__`" do
+      pycache = HOMEBREW_PREFIX/"lib/python3.99/site-packages/__pycache__"
+      foo_pyc = pycache/"foo.cypthon-3.99.pyc"
+      pycache.mkpath
+      FileUtils.touch foo_pyc
+
+      allow_any_instance_of(Pathname).to receive(:ctime).and_return(Time.now - (2 * 60 * 60 * 24))
+      allow_any_instance_of(Pathname).to receive(:mtime).and_return(Time.now - (2 * 60 * 60 * 24))
+      described_class.new(days: 1).cleanup_python_site_packages
+      expect(foo_pyc).not_to exist
     end
   end
 end

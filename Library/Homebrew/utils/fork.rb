@@ -1,42 +1,63 @@
+# typed: strict
 # frozen_string_literal: true
 
 require "fcntl"
-require "socket"
+require "utils/socket"
 
 module Utils
+  sig { params(child_error: T::Hash[String, T.untyped]).returns(Exception) }
   def self.rewrite_child_error(child_error)
-    error = if child_error.inner_class == ErrorDuringExecution
-      ErrorDuringExecution.new(child_error.inner["cmd"],
-                               status: child_error.inner["status"],
-                               output: child_error.inner["output"])
-    elsif child_error.inner_class == BuildError
+    inner_class = Object.const_get(child_error["json_class"])
+    error = if child_error["cmd"] && inner_class == ErrorDuringExecution
+      ErrorDuringExecution.new(child_error["cmd"],
+                               status: child_error["status"],
+                               output: child_error["output"])
+    elsif child_error["cmd"] && inner_class == BuildError
       # We fill `BuildError#formula` and `BuildError#options` in later,
       # when we rescue this in `FormulaInstaller#build`.
-      BuildError.new(nil, child_error.inner["cmd"],
-                     child_error.inner["args"], child_error.inner["env"])
-    elsif child_error.inner_class == Interrupt
+      BuildError.new(nil, child_error["cmd"], child_error["args"], child_error["env"])
+    elsif inner_class == Interrupt
       Interrupt.new
     else
       # Everything other error in the child just becomes a RuntimeError.
-      RuntimeError.new(child_error.message)
+      RuntimeError.new <<~EOS
+        An exception occurred within a child process:
+          #{inner_class}: #{child_error["m"]}
+      EOS
     end
 
-    error.set_backtrace child_error.backtrace
+    error.set_backtrace child_error["b"]
 
     error
   end
 
-  def self.safe_fork(&_block)
-    Dir.mktmpdir("homebrew", HOMEBREW_TEMP) do |tmpdir|
-      UNIXServer.open("#{tmpdir}/socket") do |server|
+  # When using this function, remember to call `exec` as soon as reasonably possible.
+  # This function does not protect against the pitfalls of what you can do pre-exec in a fork.
+  # See `man fork` for more information.
+  sig {
+    params(directory: T.nilable(String), yield_parent: T::Boolean,
+           _blk: T.proc.params(arg0: T.nilable(String)).void).void
+  }
+  def self.safe_fork(directory: nil, yield_parent: false, &_blk)
+    require "json/add/exception"
+
+    block = proc do |tmpdir|
+      UNIXServerExt.open("#{tmpdir}/socket") do |server|
         read, write = IO.pipe
 
         pid = fork do
-          ENV["HOMEBREW_ERROR_PIPE"] = server.path
+          # bootsnap doesn't like these forked processes
+          ENV["HOMEBREW_NO_BOOTSNAP"] = "1"
+          error_pipe = server.path
+          ENV["HOMEBREW_ERROR_PIPE"] = error_pipe
           server.close
           read.close
           write.fcntl(Fcntl::F_SETFD, Fcntl::FD_CLOEXEC)
-          yield
+
+          Process::UID.change_privilege(Process.euid) if Process.euid != Process.uid
+
+          yield(error_pipe)
+        # This could be any type of exception, so rescue them all.
         rescue Exception => e # rubocop:disable Lint/RescueException
           error_hash = JSON.parse e.to_json
 
@@ -45,7 +66,14 @@ module Utils
           # to rescue them further down.
           if e.is_a?(ErrorDuringExecution)
             error_hash["cmd"] = e.cmd
-            error_hash["status"] = e.status.exitstatus
+            error_hash["status"] = if e.status.is_a?(Process::Status)
+              {
+                exitstatus: e.status.exitstatus,
+                termsig:    e.status.termsig,
+              }
+            else
+              e.status
+            end
             error_hash["output"] = e.output
           end
 
@@ -53,11 +81,13 @@ module Utils
           write.close
 
           exit!
-        else # rubocop:disable Layout/ElseAlignment
+        else
           exit!(true)
         end
 
-        ignore_interrupts(:quietly) do # the child will receive the interrupt and marshal it back
+        begin
+          yield(nil) if yield_parent
+
           begin
             socket = server.accept_nonblock
           rescue Errno::EAGAIN, Errno::EWOULDBLOCK, Errno::ECONNABORTED, Errno::EPROTO, Errno::EINTR
@@ -69,24 +99,28 @@ module Utils
           write.close
           data = read.read
           read.close
-          Process.wait(pid) unless socket.nil?
-
-          # 130 is the exit status for a process interrupted via Ctrl-C.
-          # We handle it here because of the possibility of an interrupted process terminating
-          # without writing its Interrupt exception to the error pipe.
-          raise Interrupt if $CHILD_STATUS.exitstatus == 130
-
-          if data && !data.empty?
-            error_hash = JSON.parse(data.lines.first)
-
-            e = ChildProcessError.new(error_hash)
-
-            raise rewrite_child_error(e)
-          end
-
-          raise "Forked child process failed: #{$CHILD_STATUS}" unless $CHILD_STATUS.success?
+          Process.waitpid(pid) unless socket.nil?
+        rescue Interrupt
+          Process.waitpid(pid)
         end
+
+        # 130 is the exit status for a process interrupted via Ctrl-C.
+        raise Interrupt if $CHILD_STATUS.exitstatus == 130
+        raise Interrupt if $CHILD_STATUS.termsig == Signal.list["INT"]
+
+        if data.present?
+          error_hash = JSON.parse(data.lines.fetch(0))
+          raise rewrite_child_error(error_hash)
+        end
+
+        raise ChildProcessError, $CHILD_STATUS unless $CHILD_STATUS.success?
       end
+    end
+
+    if directory
+      block.call(directory)
+    else
+      Dir.mktmpdir("homebrew-fork", HOMEBREW_TEMP, &block)
     end
   end
 end

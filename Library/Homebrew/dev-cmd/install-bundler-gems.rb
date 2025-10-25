@@ -1,26 +1,39 @@
+# typed: strict
 # frozen_string_literal: true
 
-require "formula"
-require "cli/parser"
+require "abstract_command"
 
 module Homebrew
-  module_function
+  module DevCmd
+    class InstallBundlerGems < AbstractCommand
+      cmd_args do
+        description <<~EOS
+          Install Homebrew's Bundler gems.
+        EOS
+        comma_array "--groups",
+                    description: "Installs the specified comma-separated list of gem groups (default: last used). " \
+                                 "Replaces any previously installed groups."
+        comma_array "--add-groups",
+                    description: "Installs the specified comma-separated list of gem groups, " \
+                                 "in addition to those already installed."
 
-  def install_bundler_gems_args
-    Homebrew::CLI::Parser.new do
-      usage_banner <<~EOS
-        `install-bundler-gems`
+        conflicts "--groups", "--add-groups"
 
-        Install Homebrew's Bundler gems.
-      EOS
-      switch :debug
-      max_named 0
+        named_args :none
+      end
+
+      sig { override.void }
+      def run
+        groups = args.groups || args.add_groups || []
+
+        if groups.delete("all")
+          groups |= Homebrew.valid_gem_groups
+        elsif args.groups # if we have been asked to replace
+          Homebrew.forget_user_gem_groups!
+        end
+
+        Homebrew.install_bundler_gems!(groups:)
+      end
     end
-  end
-
-  def install_bundler_gems
-    install_bundler_gems_args.parse
-
-    Homebrew.install_bundler_gems!
   end
 end

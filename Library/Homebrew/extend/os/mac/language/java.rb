@@ -1,20 +1,26 @@
+# typed: strict
 # frozen_string_literal: true
 
-module Language
-  module Java
-    def self.java_home_cmd(version = nil)
-      version_flag = " --version #{version}" if version
-      "/usr/libexec/java_home#{version_flag}"
-    end
+module OS
+  module Mac
+    module Language
+      module Java
+        module ClassMethods
+          extend T::Helpers
 
-    def self.java_home(version = nil)
-      cmd = Language::Java.java_home_cmd(version)
-      Pathname.new Utils.popen_read(cmd).chomp
-    end
+          requires_ancestor { T.class_of(::Language::Java) }
 
-    # @private
-    def self.java_home_shell(version = nil)
-      "$(#{java_home_cmd(version)})"
+          sig { params(version: T.nilable(String)).returns(T.nilable(Pathname)) }
+          def java_home(version = nil)
+            openjdk = find_openjdk_formula(version)
+            return unless openjdk
+
+            openjdk.opt_libexec/"openjdk.jdk/Contents/Home"
+          end
+        end
+      end
     end
   end
 end
+
+Language::Java.singleton_class.prepend(OS::Mac::Language::Java::ClassMethods)

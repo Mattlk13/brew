@@ -1,31 +1,34 @@
+# typed: strict
 # frozen_string_literal: true
 
-require "cli/parser"
+require "abstract_command"
 
 module Homebrew
-  module_function
+  module Cmd
+    class Cellar < AbstractCommand
+      sig { override.returns(String) }
+      def self.command_name = "--cellar"
 
-  def __cellar_args
-    Homebrew::CLI::Parser.new do
-      usage_banner <<~EOS
-        `--cellar` [<formula>]
+      cmd_args do
+        description <<~EOS
+          Display Homebrew's Cellar path. *Default:* `$(brew --prefix)/Cellar`, or if
+          that directory doesn't exist, `$(brew --repository)/Cellar`.
 
-        Display Homebrew's Cellar path. *Default:* `$(brew --prefix)/Cellar`, or if
-        that directory doesn't exist, `$(brew --repository)/Cellar`.
+          If <formula> is provided, display the location in the Cellar where <formula>
+          would be installed, without any sort of versioned directory as the last path.
+        EOS
 
-        If <formula> is provided, display the location in the cellar where <formula>
-        would be installed, without any sort of versioned directory as the last path.
-      EOS
-    end
-  end
+        named_args :formula
+      end
 
-  def __cellar
-    __cellar_args.parse
-
-    if args.no_named?
-      puts HOMEBREW_CELLAR
-    else
-      puts args.resolved_formulae.map(&:rack)
+      sig { override.void }
+      def run
+        if args.no_named?
+          puts HOMEBREW_CELLAR
+        else
+          puts args.named.to_resolved_formulae.map(&:rack)
+        end
+      end
     end
   end
 end

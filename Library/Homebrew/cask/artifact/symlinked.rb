@@ -1,14 +1,18 @@
+# typed: true # rubocop:todo Sorbet/StrictSigil
 # frozen_string_literal: true
 
 require "cask/artifact/relocated"
 
 module Cask
   module Artifact
+    # Superclass for all artifacts which are installed by symlinking them to the target location.
     class Symlinked < Relocated
+      sig { returns(String) }
       def self.link_type_english_name
         "Symlink"
       end
 
+      sig { returns(String) }
       def self.english_description
         "#{english_name} #{link_type_english_name}s"
       end
@@ -37,35 +41,65 @@ module Cask
 
       private
 
-      def link(**options)
+      def link(force: false, adopt: false, command: nil, **_options)
         unless source.exist?
           raise CaskError,
                 "It seems the #{self.class.link_type_english_name.downcase} " \
                 "source '#{source}' is not there."
         end
 
-        if target.exist? && !target.symlink?
-          raise CaskError,
-                "It seems there is already #{self.class.english_article} " \
-                "#{self.class.english_name} at '#{target}'; not linking."
+        if target.exist?
+          message = "It seems there is already #{self.class.english_article} " \
+                    "#{self.class.english_name} at '#{target}'"
+
+          if (force || adopt) && target.symlink? &&
+             (target.realpath == source.realpath || target.realpath.to_s.start_with?("#{cask.caskroom_path}/"))
+            opoo "#{message}; overwriting."
+            Utils.gain_permissions_remove(target, command:)
+          elsif (formula = conflicting_formula)
+            opoo "#{message} from formula #{formula}; skipping link."
+            return
+          else
+            raise CaskError, "#{message}."
+          end
         end
 
-        ohai "Linking #{self.class.english_name} '#{source.basename}' to '#{target}'."
-        create_filesystem_link(**options)
+        ohai "Linking #{self.class.english_name} '#{source.basename}' to '#{target}'"
+        create_filesystem_link(command)
       end
 
-      def unlink(**)
+      def unlink(command: nil, **)
         return unless target.symlink?
 
-        ohai "Unlinking #{self.class.english_name} '#{target}'."
-        target.delete
+        ohai "Unlinking #{self.class.english_name} '#{target}'"
+
+        if (formula = conflicting_formula)
+          odebug "#{target} is from formula #{formula}; skipping unlink."
+          return
+        end
+
+        Utils.gain_permissions_remove(target, command:)
       end
 
-      def create_filesystem_link(command: nil, **_)
-        target.dirname.mkpath
-        command.run!("/bin/ln", args: ["-h", "-f", "-s", "--", source, target])
-        add_altname_metadata(source, target.basename, command: command)
+      sig { params(command: T.class_of(SystemCommand)).void }
+      def create_filesystem_link(command); end
+
+      # Check if the target file is a symlink that originates from a formula
+      # with the same name as this cask, indicating a potential conflict
+      sig { returns(T.nilable(String)) }
+      def conflicting_formula
+        if target.symlink? && target.exist? &&
+           (match = target.realpath.to_s.match(%r{^#{HOMEBREW_CELLAR}/(?<formula>[^/]+)/}o))
+          match[:formula]
+        end
+      rescue => e
+        # If we can't determine the realpath or any other error occurs,
+        # don't treat it as a conflicting formula file
+        odebug "Error checking for conflicting formula file: #{e}"
+        nil
       end
     end
   end
 end
+
+require "extend/os/cask/artifact/symlinked"

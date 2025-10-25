@@ -1,20 +1,29 @@
+# typed: strict
 # frozen_string_literal: true
 
+# A formula's checksum.
 class Checksum
   extend Forwardable
 
-  attr_reader :hash_type, :hexdigest
+  sig { returns(String) }
+  attr_reader :hexdigest
 
-  TYPES = [:sha256].freeze
-
-  def initialize(hash_type, hexdigest)
-    @hash_type = hash_type
-    @hexdigest = hexdigest
+  sig { params(hexdigest: String).void }
+  def initialize(hexdigest)
+    @hexdigest = T.let(hexdigest.downcase, String)
   end
 
-  delegate [:empty?, :to_s] => :@hexdigest
+  delegate [:empty?, :to_s, :length, :[]] => :@hexdigest
 
+  sig { params(other: T.any(String, Checksum, Symbol)).returns(T::Boolean) }
   def ==(other)
-    hash_type == other&.hash_type && hexdigest == other.hexdigest
+    case other
+    when String
+      to_s == other.downcase
+    when Checksum
+      hexdigest == other.hexdigest
+    else
+      false
+    end
   end
 end

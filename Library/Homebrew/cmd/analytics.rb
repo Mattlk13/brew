@@ -1,47 +1,48 @@
+# typed: strict
 # frozen_string_literal: true
 
-require "cli/parser"
+require "abstract_command"
 
 module Homebrew
-  module_function
+  module Cmd
+    class Analytics < AbstractCommand
+      cmd_args do
+        description <<~EOS
+          Control Homebrew's anonymous aggregate user behaviour analytics.
+          Read more at <https://docs.brew.sh/Analytics>.
 
-  def analytics_args
-    Homebrew::CLI::Parser.new do
-      usage_banner <<~EOS
-        `analytics` [<subcommand>]
+          `brew analytics` [`state`]:
+          Display the current state of Homebrew's analytics.
 
-        If `on` or `off` is passed, turn Homebrew's analytics on or off respectively.
+          `brew analytics` (`on`|`off`):
+          Turn Homebrew's analytics on or off respectively.
+        EOS
 
-        If `state` is passed, display the current anonymous user behaviour analytics state.
-        Read more at <https://docs.brew.sh/Analytics>.
-
-        If `regenerate-uuid` is passed, regenerate the UUID used in Homebrew's analytics.
-      EOS
-      switch :verbose
-      switch :debug
-      max_named 1
-    end
-  end
-
-  def analytics
-    analytics_args.parse
-
-    case args.named.first
-    when nil, "state"
-      if Utils::Analytics.disabled?
-        puts "Analytics are disabled."
-      else
-        puts "Analytics are enabled."
-        puts "UUID: #{Utils::Analytics.uuid}" if Utils::Analytics.uuid.present?
+        named_args %w[state on off regenerate-uuid], max: 1
       end
-    when "on"
-      Utils::Analytics.enable!
-    when "off"
-      Utils::Analytics.disable!
-    when "regenerate-uuid"
-      Utils::Analytics.regenerate_uuid!
-    else
-      raise UsageError, "unknown subcommand"
+
+      sig { override.void }
+      def run
+        case args.named.first
+        when nil, "state"
+          if Utils::Analytics.disabled?
+            puts "InfluxDB analytics are disabled."
+          else
+            puts "InfluxDB analytics are enabled."
+          end
+          puts "Google Analytics were destroyed."
+        when "on"
+          Utils::Analytics.enable!
+        when "off"
+          Utils::Analytics.disable!
+        when "regenerate-uuid"
+          Utils::Analytics.delete_uuid!
+          opoo "Homebrew no longer uses an analytics UUID so this has been deleted!"
+          puts "brew analytics regenerate-uuid is no longer necessary."
+        else
+          raise UsageError, "unknown subcommand: #{args.named.first}"
+        end
+      end
     end
   end
 end

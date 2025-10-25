@@ -2,26 +2,56 @@
 
 require "dependable"
 
-describe Dependable do
+RSpec.describe Dependable do
   alias_matcher :be_a_build_dependency, :be_build
 
-  subject { double(tags: tags).extend(described_class) }
+  subject(:dependable) do
+    Class.new do
+      include Dependable
 
-  let(:tags) { ["foo", "bar", :build] }
+      def initialize
+        @tags = ["foo", "bar", :build]
+      end
+    end.new
+  end
 
   specify "#options" do
-    expect(subject.options.as_flags.sort).to eq(%w[--foo --bar].sort)
+    expect(dependable.options.as_flags.sort).to eq(%w[--foo --bar].sort)
   end
 
   specify "#build?" do
-    expect(subject).to be_a_build_dependency
+    expect(dependable).to be_a_build_dependency
   end
 
   specify "#optional?" do
-    expect(subject).not_to be_optional
+    expect(dependable).not_to be_optional
   end
 
   specify "#recommended?" do
-    expect(subject).not_to be_recommended
+    expect(dependable).not_to be_recommended
+  end
+
+  specify "#no_linkage?" do
+    expect(dependable).not_to be_no_linkage
+  end
+
+  describe "with no_linkage tag" do
+    subject(:dependable_no_linkage) do
+      Class.new do
+        include Dependable
+
+        def initialize
+          @tags = [:no_linkage]
+        end
+      end.new
+    end
+
+    specify "#no_linkage?" do
+      expect(dependable_no_linkage).to be_no_linkage
+    end
+
+    specify "#required?" do
+      expect(dependable_no_linkage).to be_required
+    end
   end
 end

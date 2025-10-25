@@ -1,12 +1,22 @@
+# typed: true # rubocop:todo Sorbet/StrictSigil
 # frozen_string_literal: true
 
-module SharedEnvExtension
-  # @private
-  def effective_arch
-    if ARGV.build_bottle?
-      ARGV.bottle_arch || Hardware.oldest_cpu
-    else
-      :native
+module OS
+  module Linux
+    module SharedEnvExtension
+      def effective_arch
+        if @build_bottle && @bottle_arch
+          @bottle_arch.to_sym
+        elsif @build_bottle
+          ::Hardware.oldest_cpu
+        elsif ::Hardware::CPU.intel? || ::Hardware::CPU.arm?
+          :native
+        else
+          :dunno
+        end
+      end
     end
   end
 end
+
+SharedEnvExtension.prepend(OS::Linux::SharedEnvExtension)

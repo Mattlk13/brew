@@ -3,7 +3,7 @@
 require "extend/pathname"
 require "install_renamed"
 
-describe Pathname do
+RSpec.describe Pathname do
   include FileUtils
 
   let(:src) { mktmpdir }
@@ -62,19 +62,6 @@ describe Pathname do
     end
   end
 
-  describe "#write" do
-    it "creates a file and writes to it" do
-      expect(file).not_to exist
-      file.write("CONTENT")
-      expect(File.read(file)).to eq("CONTENT")
-    end
-
-    it "raises an error if the file already exists" do
-      touch file
-      expect { file.write("CONTENT") }.to raise_error(RuntimeError)
-    end
-  end
-
   describe "#append_lines" do
     it "appends lines to a file" do
       touch file
@@ -105,9 +92,11 @@ describe Pathname do
     end
 
     it "preserves permissions" do
-      File.open(file, "w", 0100777) {}
+      File.open(file, "w", 0100777) do
+        # do nothing
+      end
       file.atomic_write("CONTENT")
-      expect(file.stat.mode.to_s(8)).to eq((0100777 & ~File.umask).to_s(8))
+      expect(file.stat.mode.to_s(8)).to eq((~File.umask & 0100777).to_s(8))
     end
 
     it "preserves default permissions" do

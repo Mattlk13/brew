@@ -1,34 +1,57 @@
+# typed: true # rubocop:todo Sorbet/StrictSigil
 # frozen_string_literal: true
 
-require "download_strategy"
-require "checksum"
-require "version"
+require "downloadable"
 require "mktemp"
+require "livecheck"
+require "on_system"
+require "utils/output"
 
 # Resource is the fundamental representation of an external resource. The
 # primary formula download, along with other declared resources, are instances
 # of this class.
 class Resource
+  include Downloadable
   include FileUtils
+  include OnSystem::MacOSAndLinux
+  include Utils::Output::Mixin
 
-  attr_reader :mirrors, :specs, :using, :source_modified_time, :patches, :owner
-  attr_writer :version
-  attr_accessor :download_strategy, :checksum
+  attr_reader :source_modified_time, :patches, :owner
+  attr_writer :checksum
+  attr_accessor :download_strategy
 
   # Formula name must be set after the DSL, as we have no access to the
-  # formula name before initialization of the formula
+  # formula name before initialization of the formula.
   attr_accessor :name
 
+  sig { params(name: T.nilable(String), block: T.nilable(T.proc.bind(Resource).void)).void }
   def initialize(name = nil, &block)
+    super()
+    # Generally ensure this is synced with `initialize_dup` and `freeze`
+    # (excluding simple objects like integers & booleans, weak refs like `owner` or permafrozen objects)
     @name = name
-    @url = nil
-    @version = nil
-    @mirrors = []
-    @specs = {}
-    @checksum = nil
-    @using = nil
+    @source_modified_time = nil
     @patches = []
-    instance_eval(&block) if block_given?
+    @owner = nil
+    @livecheck = Livecheck.new(self)
+    @livecheck_defined = false
+    @insecure = false
+    instance_eval(&block) if block
+  end
+
+  sig { override.params(other: T.any(Resource, Downloadable)).void }
+  def initialize_dup(other)
+    super
+    @name = @name.dup
+    @patches = @patches.dup
+    @livecheck = @livecheck.dup
+  end
+
+  def freeze
+    @name.freeze
+    @patches.freeze
+    @livecheck.freeze
+    super
   end
 
   def owner=(owner)
@@ -36,48 +59,33 @@ class Resource
     patches.each { |p| p.owner = owner }
   end
 
-  def downloader
-    @downloader ||= download_strategy.new(url, download_name, version,
-                                          mirrors: mirrors.dup, **specs)
-  end
-
-  # Removes /s from resource names; this allows go package names
-  # to be used as resource names without confusing software that
-  # interacts with download_name, e.g. github.com/foo/bar
-  def escaped_name
-    name.tr("/", "-")
-  end
-
-  def download_name
-    return owner.name if name.nil?
-    return escaped_name if owner.nil?
-
-    "#{owner.name}--#{escaped_name}"
-  end
-
-  def cached_download
-    downloader.cached_location
-  end
-
-  def clear_cache
-    downloader.clear_cache
-  end
+  sig { override.returns(String) }
+  def download_queue_type = "Resource"
 
   # Verifies download and unpacks it.
-  # The block may call `|resource,staging| staging.retain!` to retain the staging
+  # The block may call `|resource, staging| staging.retain!` to retain the staging
   # directory. Subclasses that override stage should implement the tmp
   # dir using {Mktemp} so that works with all subtypes.
-  def stage(target = nil, &block)
-    raise ArgumentError, "target directory or block is required" unless target || block
+  #
+  # @api public
+  def stage(target = nil, debug_symbols: false, &block)
+    raise ArgumentError, "Target directory or block is required" if !target && !block_given?
 
-    fetch
     prepare_patches
-    unpack(target, &block)
+    fetch_patches(skip_downloaded: true)
+    fetch unless downloaded?
+
+    unpack(target, debug_symbols:, &block)
   end
 
   def prepare_patches
     patches.grep(DATAPatch) { |p| p.path = owner.owner.path }
-    patches.select(&:external?).each(&:fetch)
+  end
+
+  def fetch_patches(skip_downloaded: false)
+    external_patches = patches.select(&:external?)
+    external_patches.reject!(&:downloaded?) if skip_downloaded
+    external_patches.each(&:fetch)
   end
 
   def apply_patches
@@ -91,16 +99,19 @@ class Resource
   # If block is given, yield to that block with `|stage|`, where stage
   # is a {ResourceStageContext}.
   # A target or a block must be given, but not both.
-  def unpack(target = nil)
-    mktemp(download_name) do |staging|
-      downloader.stage
-      @source_modified_time = downloader.source_modified_time
-      apply_patches
-      if block_given?
-        yield ResourceStageContext.new(self, staging)
-      elsif target
-        target = Pathname(target)
-        target.install Pathname.pwd.children
+  def unpack(target = nil, debug_symbols: false)
+    current_working_directory = Pathname.pwd
+    stage_resource(download_name, debug_symbols:) do |staging|
+      downloader.stage do
+        @source_modified_time = downloader.source_modified_time.freeze
+        apply_patches
+        if block_given?
+          yield ResourceStageContext.new(self, staging)
+        elsif target
+          target = Pathname(target)
+          target = current_working_directory/target if target.relative?
+          target.install Pathname.pwd.children
+        end
       end
     end
   end
@@ -111,48 +122,91 @@ class Resource
     Partial.new(self, files)
   end
 
-  def fetch(verify_download_integrity: true)
-    HOMEBREW_CACHE.mkpath
+  sig {
+    override
+      .params(
+        verify_download_integrity: T::Boolean,
+        timeout:                   T.nilable(T.any(Integer, Float)),
+        quiet:                     T::Boolean,
+        skip_patches:              T::Boolean,
+      ).returns(Pathname)
+  }
+  def fetch(verify_download_integrity: true, timeout: nil, quiet: false, skip_patches: false)
+    fetch_patches unless skip_patches
 
-    begin
-      downloader.fetch
-    rescue ErrorDuringExecution, CurlDownloadStrategyError => e
-      raise DownloadError.new(self, e)
-    end
-
-    download = cached_download
-    verify_download_integrity(download) if verify_download_integrity
-    download
+    super(verify_download_integrity:, timeout:, quiet:)
   end
 
-  def verify_download_integrity(fn)
-    if fn.file?
-      ohai "Verifying #{fn.basename} checksum" if Homebrew.args.verbose?
-      fn.verify_checksum(checksum)
-    end
-  rescue ChecksumMissingError
-    opoo "Cannot verify integrity of #{fn.basename}"
-    puts "A checksum was not provided for this resource."
-    puts "For your reference the SHA-256 is: #{fn.sha256}"
+  # {Livecheck} can be used to check for newer versions of the software.
+  # This method evaluates the DSL specified in the `livecheck` block of the
+  # {Resource} (if it exists) and sets the instance variables of a {Livecheck}
+  # object accordingly. This is used by `brew livecheck` to check for newer
+  # versions of the software.
+  #
+  # ### Example
+  #
+  # ```ruby
+  # livecheck do
+  #   url "https://example.com/foo/releases"
+  #   regex /foo-(\d+(?:\.\d+)+)\.tar/
+  # end
+  # ```
+  def livecheck(&block)
+    return @livecheck unless block
+
+    @livecheck_defined = true
+    @livecheck.instance_eval(&block)
   end
 
-  Checksum::TYPES.each do |type|
-    define_method(type) { |val| @checksum = Checksum.new(type, val) }
+  # Whether a livecheck specification is defined or not.
+  #
+  # It returns `true` when a `livecheck` block is present in the {Resource}
+  # and `false` otherwise.
+  sig { returns(T::Boolean) }
+  def livecheck_defined?
+    @livecheck_defined == true
   end
 
+  # Whether a livecheck specification is defined or not. This is a legacy alias
+  # for `#livecheck_defined?`.
+  #
+  # It returns `true` when a `livecheck` block is present in the {Resource}
+  # and `false` otherwise.
+  sig { returns(T::Boolean) }
+  def livecheckable?
+    odisabled "`livecheckable?`", "`livecheck_defined?`"
+    @livecheck_defined == true
+  end
+
+  def sha256(val)
+    @checksum = Checksum.new(val)
+  end
+
+  sig { override.params(val: T.nilable(String), specs: T.anything).returns(T.nilable(String)) }
   def url(val = nil, **specs)
-    return @url if val.nil?
+    return @url&.to_s if val.nil?
 
-    @url = val
-    @specs.merge!(specs)
-    @using = @specs.delete(:using)
-    @download_strategy = DownloadStrategyDetector.detect(url, using)
+    specs = specs.dup
+    # Don't allow this to be set.
+    specs.delete(:insecure)
+
+    specs[:insecure] = true if @insecure
+
+    @url = URL.new(val, specs)
+    @downloader = nil
+    @download_strategy = @url.download_strategy
+    @url.to_s
   end
 
+  sig { override.params(val: T.nilable(T.any(String, Version))).returns(T.nilable(Version)) }
   def version(val = nil)
-    @version ||= begin
-      version = detect_version(val)
-      version.null? ? nil : version
+    return super() if val.nil?
+
+    @version = case val
+    when String
+      val.blank? ? Version::NULL : Version.new(val)
+    when Version
+      val
     end
   end
 
@@ -161,39 +215,170 @@ class Resource
   end
 
   def patch(strip = :p1, src = nil, &block)
-    p = Patch.create(strip, src, &block)
+    p = ::Patch.create(strip, src, &block)
     patches << p
+  end
+
+  def using
+    @url&.using
+  end
+
+  def specs
+    @url&.specs || {}.freeze
   end
 
   protected
 
-  def mktemp(prefix)
-    Mktemp.new(prefix).run do |staging|
-      yield staging
-    end
+  def stage_resource(prefix, debug_symbols: false, &block)
+    Mktemp.new(prefix, retain_in_cache: debug_symbols).run(&block)
   end
 
   private
 
-  def detect_version(val)
-    return Version::NULL if val.nil? && url.nil?
+  sig { override.returns(String) }
+  def download_name
+    return owner.name if name.nil?
 
-    case val
-    when nil     then Version.detect(url, specs)
-    when String  then Version.create(val)
-    when Version then val
-    else
-      raise TypeError, "version '#{val.inspect}' should be a string"
+    # Removes /s from resource names; this allows Go package names
+    # to be used as resource names without confusing software that
+    # interacts with {download_name}, e.g. `github.com/foo/bar`.
+    escaped_name = name.tr("/", "-")
+    return escaped_name if owner.nil?
+
+    "#{owner.name}--#{escaped_name}"
+  end
+
+  def determine_url_mirrors
+    extra_urls = []
+    url = T.must(self.url)
+
+    # glibc-bootstrap
+    if url.start_with?("https://github.com/Homebrew/glibc-bootstrap/releases/download")
+      if (artifact_domain = Homebrew::EnvConfig.artifact_domain.presence)
+        artifact_url = url.sub("https://github.com", artifact_domain)
+        return [artifact_url] if Homebrew::EnvConfig.artifact_domain_no_fallback?
+
+        extra_urls << artifact_url
+      end
+
+      if Homebrew::EnvConfig.bottle_domain != HOMEBREW_BOTTLE_DEFAULT_DOMAIN
+        tag, filename = url.split("/").last(2)
+        extra_urls << "#{Homebrew::EnvConfig.bottle_domain}/glibc-bootstrap/#{tag}/#{filename}"
+      end
+    end
+
+    # PyPI packages: PEP 503 – Simple Repository API <https://peps.python.org/pep-0503>
+    if (pip_index_url = Homebrew::EnvConfig.pip_index_url.presence)
+      pip_index_base_url = pip_index_url.chomp("/").chomp("/simple")
+      %w[https://files.pythonhosted.org https://pypi.org].each do |base_url|
+        extra_urls << url.sub(base_url, pip_index_base_url) if url.start_with?("#{base_url}/packages")
+      end
+    end
+
+    [*extra_urls, *super].uniq
+  end
+
+  # A local resource that doesn't need to be downloaded.
+  class Local < Resource
+    def initialize(path)
+      super(File.basename(path))
+      @downloader = LocalBottleDownloadStrategy.new(path)
     end
   end
 
+  # A resource for a formula.
+  class Formula < Resource
+    sig { override.returns(String) }
+    def download_queue_type = "Formula"
+
+    sig { override.returns(String) }
+    def download_queue_name = "#{T.must(owner).name} (#{version})"
+  end
+
+  # A resource containing a Go package.
   class Go < Resource
-    def stage(target)
-      super(target/name)
+    def stage(target, &block)
+      super(target/name, &block)
     end
   end
 
-  class PatchResource < Resource
+  # A resource for a bottle manifest.
+  class BottleManifest < Resource
+    class Error < RuntimeError; end
+
+    attr_reader :bottle
+
+    def initialize(bottle)
+      super("#{bottle.name}_bottle_manifest")
+      @bottle = bottle
+      @manifest_annotations = nil
+    end
+
+    def verify_download_integrity(_filename)
+      # We don't have a checksum, but we can at least try parsing it.
+      tab
+    end
+
+    def tab
+      tab = manifest_annotations["sh.brew.tab"]
+      raise Error, "Couldn't find tab from manifest." if tab.blank?
+
+      begin
+        JSON.parse(tab)
+      rescue JSON::ParserError
+        raise Error, "Couldn't parse tab JSON."
+      end
+    end
+
+    sig { returns(T.nilable(Integer)) }
+    def bottle_size
+      manifest_annotations["sh.brew.bottle.size"]&.to_i
+    end
+
+    sig { returns(T.nilable(Integer)) }
+    def installed_size
+      manifest_annotations["sh.brew.bottle.installed_size"]&.to_i
+    end
+
+    sig { override.returns(String) }
+    def download_queue_type = "Bottle Manifest"
+
+    sig { override.returns(String) }
+    def download_queue_name = "#{bottle.name} (#{bottle.resource.version})"
+
+    private
+
+    def manifest_annotations
+      return @manifest_annotations unless @manifest_annotations.nil?
+
+      json = begin
+        JSON.parse(cached_download.read)
+      rescue JSON::ParserError
+        raise Error, "The downloaded GitHub Packages manifest was corrupted or modified (it is not valid JSON): " \
+                     "\n#{cached_download}"
+      end
+
+      manifests = json["manifests"]
+      raise Error, "Missing 'manifests' section." if manifests.blank?
+
+      manifests_annotations = manifests.filter_map { |m| m["annotations"] }
+      raise Error, "Missing 'annotations' section." if manifests_annotations.blank?
+
+      bottle_digest = bottle.resource.checksum.hexdigest
+      image_ref = GitHubPackages.version_rebuild(bottle.resource.version, bottle.rebuild, bottle.tag.to_s)
+      manifest_annotations = manifests_annotations.find do |m|
+        next if m["sh.brew.bottle.digest"] != bottle_digest
+
+        m["org.opencontainers.image.ref.name"] == image_ref
+      end
+      raise Error, "Couldn't find manifest matching bottle checksum." if manifest_annotations.blank?
+
+      @manifest_annotations = manifest_annotations
+    end
+  end
+
+  # A resource containing a patch.
+  class Patch < Resource
     attr_reader :patch_files
 
     def initialize(&block)
@@ -213,18 +398,31 @@ class Resource
 
       @directory = val
     end
+
+    sig { override.returns(String) }
+    def download_queue_type = "Patch"
+
+    sig { override.returns(String) }
+    def download_queue_name
+      if (last_url_component = url.to_s.split("/").last)
+        return last_url_component
+      end
+
+      super
+    end
   end
 end
 
-# The context in which a {Resource.stage} occurs. Supports access to both
+# The context in which a {Resource#stage} occurs. Supports access to both
 # the {Resource} and associated {Mktemp} in a single block argument. The interface
 # is back-compatible with {Resource} itself as used in that context.
 class ResourceStageContext
   extend Forwardable
 
-  # The {Resource} that is being staged
+  # The {Resource} that is being staged.
   attr_reader :resource
-  # The {Mktemp} in which {#resource} is staged
+
+  # The {Mktemp} in which {#resource} is staged.
   attr_reader :staging
 
   def_delegators :@resource, :version, :url, :mirrors, :specs, :using, :source_modified_time
@@ -235,6 +433,7 @@ class ResourceStageContext
     @staging = staging
   end
 
+  sig { returns(String) }
   def to_s
     "<#{self.class}: resource=#{resource} staging=#{staging}>"
   end

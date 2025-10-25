@@ -1,12 +1,15 @@
 # frozen_string_literal: true
 
-describe Tap do
+RSpec.describe Tap do
+  include FileUtils
+
+  alias_matcher :have_cask_file, :be_cask_file
   alias_matcher :have_formula_file, :be_formula_file
   alias_matcher :have_custom_remote, :be_custom_remote
 
-  subject { described_class.new("Homebrew", "foo") }
+  subject(:homebrew_foo_tap) { described_class.fetch("Homebrew", "foo") }
 
-  let(:path) { Tap::TAP_DIRECTORY/"homebrew/homebrew-foo" }
+  let(:path) { HOMEBREW_TAP_DIRECTORY/"homebrew/homebrew-foo" }
   let(:formula_file) { path/"Formula/foo.rb" }
   let(:alias_file) { path/"Aliases/bar" }
   let(:cmd_file) { path/"cmd/brew-tap-cmd.rb" }
@@ -17,9 +20,15 @@ describe Tap do
 
   before do
     path.mkpath
+    (path/"audit_exceptions").mkpath
+    (path/"style_exceptions").mkpath
+
+    # requiring utils/output in tap.rb should be enough but it's not for no apparent reason.
+    $stderr.extend(Utils::Output::Mixin)
   end
 
   def setup_tap_files
+    formula_file.dirname.mkpath
     formula_file.write <<~RUBY
       class Foo < Formula
         url "https://brew.sh/foo-1.0.tar.gz"
@@ -35,6 +44,29 @@ describe Tap do
 
     (path/"tap_migrations.json").write <<~JSON
       { "removed-formula": "homebrew/foo" }
+    JSON
+
+    %w[audit_exceptions style_exceptions].each do |exceptions_directory|
+      (path/exceptions_directory).mkpath
+
+      (path/"#{exceptions_directory}/formula_list.json").write <<~JSON
+        [ "foo", "bar" ]
+      JSON
+
+      (path/"#{exceptions_directory}/formula_hash.json").write <<~JSON
+        { "foo": "foo1", "bar": "bar1" }
+      JSON
+    end
+
+    (path/"pypi_formula_mappings.json").write <<~JSON
+      {
+        "formula1": "foo",
+        "formula2": {
+          "package_name": "foo",
+          "extra_packages": ["bar"],
+          "exclude_packages": ["baz"]
+        }
+      }
     JSON
 
     [
@@ -60,24 +92,32 @@ describe Tap do
     end
   end
 
+  def setup_completion(link:)
+    HOMEBREW_REPOSITORY.cd do
+      system "git", "init"
+      system "git", "config", "--replace-all", "homebrew.linkcompletions", link.to_s
+      system "git", "config", "--replace-all", "homebrew.completionsmessageshown", "true"
+    end
+  end
+
   specify "::fetch" do
-    expect(described_class.fetch("Homebrew", "core")).to be_kind_of(CoreTap)
-    expect(described_class.fetch("Homebrew", "homebrew")).to be_kind_of(CoreTap)
+    expect(described_class.fetch("Homebrew", "core")).to be_a(CoreTap)
+    expect(described_class.fetch("Homebrew", "homebrew")).to be_a(CoreTap)
     tap = described_class.fetch("Homebrew", "foo")
-    expect(tap).to be_kind_of(described_class)
+    expect(tap).to be_a(described_class)
     expect(tap.name).to eq("homebrew/foo")
 
-    expect {
+    expect do
       described_class.fetch("foo")
-    }.to raise_error(/Invalid tap name/)
+    end.to raise_error(Tap::InvalidNameError, /Invalid tap name/)
 
-    expect {
+    expect do
       described_class.fetch("homebrew/homebrew/bar")
-    }.to raise_error(/Invalid tap name/)
+    end.to raise_error(Tap::InvalidNameError, /Invalid tap name/)
 
-    expect {
+    expect do
       described_class.fetch("homebrew", "homebrew/baz")
-    }.to raise_error(/Invalid tap name/)
+    end.to raise_error(Tap::InvalidNameError, /Invalid tap name/)
   end
 
   describe "::from_path" do
@@ -92,25 +132,51 @@ describe Tap do
     it "returns the Tap when given its exact path" do
       expect(described_class.from_path(path)).to eq tap
     end
+
+    context "when path contains a dot" do
+      let(:tap) { described_class.fetch("str4d.xyz", "rage") }
+
+      after do
+        tap.uninstall
+      end
+
+      it "returns the Tap when given its exact path" do
+        expect(described_class.from_path(path)).to eq tap
+      end
+    end
   end
 
-  specify "::names" do
-    expect(described_class.names.sort).to eq(["homebrew/core", "homebrew/foo"])
+  describe "::allowed_taps" do
+    before { allow(Homebrew::EnvConfig).to receive(:allowed_taps).and_return("homebrew/allowed") }
+
+    it "returns a set of allowed taps according to the environment" do
+      expect(described_class.allowed_taps)
+        .to contain_exactly(described_class.fetch("homebrew/allowed"))
+    end
+  end
+
+  describe "::forbidden_taps" do
+    before { allow(Homebrew::EnvConfig).to receive(:forbidden_taps).and_return("homebrew/forbidden") }
+
+    it "returns a set of forbidden taps according to the environment" do
+      expect(described_class.forbidden_taps)
+        .to contain_exactly(described_class.fetch("homebrew/forbidden"))
+    end
   end
 
   specify "attributes" do
-    expect(subject.user).to eq("Homebrew")
-    expect(subject.repo).to eq("foo")
-    expect(subject.name).to eq("homebrew/foo")
-    expect(subject.path).to eq(path)
-    expect(subject).to be_installed
-    expect(subject).to be_official
-    expect(subject).not_to be_a_core_tap
+    expect(homebrew_foo_tap.user).to eq("Homebrew")
+    expect(homebrew_foo_tap.repository).to eq("foo")
+    expect(homebrew_foo_tap.name).to eq("homebrew/foo")
+    expect(homebrew_foo_tap.path).to eq(path)
+    expect(homebrew_foo_tap).to be_installed
+    expect(homebrew_foo_tap).to be_official
+    expect(homebrew_foo_tap).not_to be_a_core_tap
   end
 
   specify "#issues_url" do
-    t = described_class.new("someone", "foo")
-    path = Tap::TAP_DIRECTORY/"someone/homebrew-foo"
+    t = described_class.fetch("someone", "foo")
+    path = HOMEBREW_TAP_DIRECTORY/"someone/homebrew-foo"
     path.mkpath
     cd path do
       system "git", "init"
@@ -118,58 +184,127 @@ describe Tap do
              "https://github.com/someone/homebrew-foo"
     end
     expect(t.issues_url).to eq("https://github.com/someone/homebrew-foo/issues")
-    expect(subject.issues_url).to eq("https://github.com/Homebrew/homebrew-foo/issues")
+    expect(homebrew_foo_tap.issues_url).to eq("https://github.com/Homebrew/homebrew-foo/issues")
 
-    (Tap::TAP_DIRECTORY/"someone/homebrew-no-git").mkpath
-    expect(described_class.new("someone", "no-git").issues_url).to be nil
+    (HOMEBREW_TAP_DIRECTORY/"someone/homebrew-no-git").mkpath
+    expect(described_class.fetch("someone", "no-git").issues_url).to be_nil
   ensure
-    path.parent.rmtree
+    FileUtils.rm_rf(path.parent)
   end
 
   specify "files" do
     setup_tap_files
 
-    expect(subject.formula_files).to eq([formula_file])
-    expect(subject.formula_names).to eq(["homebrew/foo/foo"])
-    expect(subject.alias_files).to eq([alias_file])
-    expect(subject.aliases).to eq(["homebrew/foo/bar"])
-    expect(subject.alias_table).to eq("homebrew/foo/bar" => "homebrew/foo/foo")
-    expect(subject.alias_reverse_table).to eq("homebrew/foo/foo" => ["homebrew/foo/bar"])
-    expect(subject.formula_renames).to eq("oldname" => "foo")
-    expect(subject.tap_migrations).to eq("removed-formula" => "homebrew/foo")
-    expect(subject.command_files).to eq([cmd_file])
-    expect(subject.to_hash).to be_kind_of(Hash)
-    expect(subject).to have_formula_file(formula_file)
-    expect(subject).to have_formula_file("Formula/foo.rb")
-    expect(subject).not_to have_formula_file("bar.rb")
-    expect(subject).not_to have_formula_file("Formula/baz.sh")
+    expect(homebrew_foo_tap.formula_files).to eq([formula_file])
+    expect(homebrew_foo_tap.formula_names).to eq(["homebrew/foo/foo"])
+    expect(homebrew_foo_tap.alias_files).to eq([alias_file])
+    expect(homebrew_foo_tap.aliases).to eq(["homebrew/foo/bar"])
+    expect(homebrew_foo_tap.alias_table).to eq("homebrew/foo/bar" => "homebrew/foo/foo")
+    expect(homebrew_foo_tap.alias_reverse_table).to eq("homebrew/foo/foo" => ["homebrew/foo/bar"])
+    expect(homebrew_foo_tap.formula_renames).to eq("oldname" => "foo")
+    expect(homebrew_foo_tap.tap_migrations).to eq("removed-formula" => "homebrew/foo")
+    expect(homebrew_foo_tap.command_files).to eq([cmd_file])
+    expect(homebrew_foo_tap.to_hash).to be_a(Hash)
+    expect(homebrew_foo_tap).to have_formula_file("Formula/foo.rb")
+    expect(homebrew_foo_tap).not_to have_formula_file("bar.rb")
+    expect(homebrew_foo_tap).not_to have_formula_file("Formula/baz.sh")
   end
 
   describe "#remote" do
-    it "returns the remote URL" do
+    it "returns the remote URL", :needs_network do
       setup_git_repo
 
-      expect(subject.remote).to eq("https://github.com/Homebrew/homebrew-foo")
-      expect { described_class.new("Homebrew", "bar").remote }.to raise_error(TapUnavailableError)
-      expect(subject).not_to have_custom_remote
+      expect(homebrew_foo_tap.remote).to eq("https://github.com/Homebrew/homebrew-foo")
+      expect(homebrew_foo_tap).not_to have_custom_remote
 
-      services_tap = described_class.new("Homebrew", "services")
+      services_tap = described_class.fetch("Homebrew", "test-bot")
       services_tap.path.mkpath
       services_tap.path.cd do
         system "git", "init"
-        system "git", "remote", "add", "origin", "https://github.com/Homebrew/homebrew-services"
+        system "git", "remote", "add", "origin", "https://github.com/Homebrew/homebrew-test-bot"
       end
       expect(services_tap).not_to be_private
     end
 
-    it "returns nil if the Tap is not a Git repo" do
-      expect(subject.remote).to be nil
+    it "returns nil if the Tap is not a Git repository" do
+      expect(homebrew_foo_tap.remote).to be_nil
     end
 
     it "returns nil if Git is not available" do
       setup_git_repo
-      allow(Utils).to receive(:git_available?).and_return(false)
-      expect(subject.remote).to be nil
+      allow(Utils::Git).to receive(:available?).and_return(false)
+      expect(homebrew_foo_tap.remote).to be_nil
+    end
+  end
+
+  describe "#remote_repo" do
+    it "returns the remote https repository" do
+      setup_git_repo
+
+      expect(homebrew_foo_tap.remote_repository).to eq("Homebrew/homebrew-foo")
+
+      services_tap = described_class.fetch("Homebrew", "test-bot")
+      services_tap.path.mkpath
+      services_tap.path.cd do
+        system "git", "init"
+        system "git", "remote", "add", "origin", "https://github.com/Homebrew/homebrew-bar"
+      end
+      expect(services_tap.remote_repository).to eq("Homebrew/homebrew-bar")
+    end
+
+    it "returns the remote ssh repository" do
+      setup_git_repo
+
+      expect(homebrew_foo_tap.remote_repository).to eq("Homebrew/homebrew-foo")
+
+      services_tap = described_class.fetch("Homebrew", "test-bot")
+      services_tap.path.mkpath
+      services_tap.path.cd do
+        system "git", "init"
+        system "git", "remote", "add", "origin", "git@github.com:Homebrew/homebrew-bar"
+      end
+      expect(services_tap.remote_repository).to eq("Homebrew/homebrew-bar")
+    end
+
+    it "returns nil if the Tap is not a Git repository" do
+      expect(homebrew_foo_tap.remote_repository).to be_nil
+    end
+
+    it "returns nil if Git is not available" do
+      setup_git_repo
+      allow(Utils::Git).to receive(:available?).and_return(false)
+      expect(homebrew_foo_tap.remote_repository).to be_nil
+    end
+  end
+
+  describe "#custom_remote?" do
+    subject(:tap) { described_class.fetch("Homebrew", "test-bot") }
+
+    let(:remote) { nil }
+
+    before do
+      tap.path.mkpath
+      system "git", "-C", tap.path, "init"
+      system "git", "-C", tap.path, "remote", "add", "origin", remote if remote
+    end
+
+    context "if no remote is available" do
+      it "returns true" do
+        expect(tap.remote).to be_nil
+        expect(tap.custom_remote?).to be true
+      end
+    end
+
+    context "when using the default remote" do
+      let(:remote) { "https://github.com/Homebrew/homebrew-test-bot" }
+
+      it(:custom_remote?) { expect(tap.custom_remote?).to be false }
+    end
+
+    context "when using a non-default remote" do
+      let(:remote) { "git@github.com:Homebrew/homebrew-test-bot" }
+
+      it(:custom_remote?) { expect(tap.custom_remote?).to be true }
     end
   end
 
@@ -177,83 +312,82 @@ describe Tap do
     touch path/"README"
     setup_git_repo
 
-    expect(subject.git_head).to eq("0453e16c8e3fac73104da50927a86221ca0740c2")
-    expect(subject.git_short_head).to eq("0453")
-    expect(subject.git_last_commit).to match(/\A\d+ .+ ago\Z/)
-    expect(subject.git_last_commit_date).to eq("2017-01-22")
+    expect(homebrew_foo_tap.git_head).to eq("0453e16c8e3fac73104da50927a86221ca0740c2")
+    expect(homebrew_foo_tap.git_last_commit).to match(/\A\d+ .+ ago\Z/)
   end
 
-  specify "#private?" do
-    skip "HOMEBREW_GITHUB_API_TOKEN is required" unless GitHub.api_credentials
-    expect(subject).to be_private
+  specify "#private?", :needs_network do
+    expect(homebrew_foo_tap).to be_private
   end
 
   describe "#install" do
     it "raises an error when the Tap is already tapped" do
       setup_git_repo
-      already_tapped_tap = described_class.new("Homebrew", "foo")
+      already_tapped_tap = described_class.fetch("Homebrew", "foo")
       expect(already_tapped_tap).to be_installed
       expect { already_tapped_tap.install }.to raise_error(TapAlreadyTappedError)
     end
 
     it "raises an error when the Tap is already tapped with the right remote" do
       setup_git_repo
-      already_tapped_tap = described_class.new("Homebrew", "foo")
+      already_tapped_tap = described_class.fetch("Homebrew", "foo")
       expect(already_tapped_tap).to be_installed
-      right_remote = subject.remote
+      right_remote = homebrew_foo_tap.remote
       expect { already_tapped_tap.install clone_target: right_remote }.to raise_error(TapAlreadyTappedError)
     end
 
     it "raises an error when the remote doesn't match" do
       setup_git_repo
-      already_tapped_tap = described_class.new("Homebrew", "foo")
+      already_tapped_tap = described_class.fetch("Homebrew", "foo")
       expect(already_tapped_tap).to be_installed
-      wrong_remote = "#{subject.remote}-oops"
-      expect {
+      wrong_remote = "#{homebrew_foo_tap.remote}-oops"
+      expect do
         already_tapped_tap.install clone_target: wrong_remote
-      }.to raise_error(TapRemoteMismatchError)
+      end.to raise_error(TapRemoteMismatchError)
     end
 
-    describe "force_auto_update" do
-      before do
-        setup_git_repo
-      end
+    it "raises an error when the remote for Homebrew/core doesn't match HOMEBREW_CORE_GIT_REMOTE" do
+      core_tap = described_class.fetch("Homebrew", "core")
+      wrong_remote = "#{Homebrew::EnvConfig.core_git_remote}-oops"
+      expect do
+        core_tap.install clone_target: wrong_remote
+      end.to raise_error(TapCoreRemoteMismatchError)
+    end
 
-      let(:already_tapped_tap) { described_class.new("Homebrew", "foo") }
+    it "raises an error when run `brew tap --custom-remote` without a custom remote (already installed)" do
+      setup_git_repo
+      already_tapped_tap = described_class.fetch("Homebrew", "foo")
+      expect(already_tapped_tap).to be_installed
 
-      it "defaults to nil" do
-        expect(already_tapped_tap).to be_installed
-        expect(already_tapped_tap.config["forceautoupdate"]).to be_nil
-      end
+      expect do
+        already_tapped_tap.install clone_target: nil, custom_remote: true
+      end.to raise_error(TapNoCustomRemoteError)
+    end
 
-      it "enables forced auto-updates when true" do
-        expect(already_tapped_tap).to be_installed
-        already_tapped_tap.install force_auto_update: true
-        expect(already_tapped_tap.config["forceautoupdate"]).to eq("true")
-      end
+    it "raises an error when run `brew tap --custom-remote` without a custom remote (not installed)" do
+      not_tapped_tap = described_class.fetch("Homebrew", "bar")
+      expect(not_tapped_tap).not_to be_installed
 
-      it "disables forced auto-updates when false" do
-        expect(already_tapped_tap).to be_installed
-        already_tapped_tap.install force_auto_update: false
-        expect(already_tapped_tap.config["forceautoupdate"]).to eq("false")
-      end
+      expect do
+        not_tapped_tap.install clone_target: nil, custom_remote: true
+      end.to raise_error(TapNoCustomRemoteError)
     end
 
     specify "Git error" do
-      tap = described_class.new("user", "repo")
+      tap = described_class.fetch("user", "repo")
 
-      expect {
+      expect do
         tap.install clone_target: "file:///not/existed/remote/url"
-      }.to raise_error(ErrorDuringExecution)
+      end.to raise_error(ErrorDuringExecution)
 
       expect(tap).not_to be_installed
-      expect(Tap::TAP_DIRECTORY/"user").not_to exist
+      expect(HOMEBREW_TAP_DIRECTORY/"user").not_to exist
     end
   end
 
   describe "#uninstall" do
     it "raises an error if the Tap is not available" do
-      tap = described_class.new("Homebrew", "bar")
+      tap = described_class.fetch("Homebrew", "bar")
       expect { tap.uninstall }.to raise_error(TapUnavailableError)
     end
   end
@@ -261,10 +395,11 @@ describe Tap do
   specify "#install and #uninstall" do
     setup_tap_files
     setup_git_repo
+    setup_completion link: true
 
-    tap = described_class.new("Homebrew", "bar")
+    tap = described_class.fetch("Homebrew", "bar")
 
-    tap.install clone_target: subject.path/".git"
+    tap.install clone_target: homebrew_foo_tap.path/".git"
 
     expect(tap).to be_installed
     expect(HOMEBREW_PREFIX/"share/man/man1/brew-tap-cmd.1").to be_a_file
@@ -280,15 +415,16 @@ describe Tap do
     expect(HOMEBREW_PREFIX/"share/zsh/site-functions/_brew-tap-cmd").not_to exist
     expect(HOMEBREW_PREFIX/"share/fish/vendor_completions.d/brew-tap-cmd.fish").not_to exist
   ensure
-    (HOMEBREW_PREFIX/"etc").rmtree if (HOMEBREW_PREFIX/"etc").exist?
-    (HOMEBREW_PREFIX/"share").rmtree if (HOMEBREW_PREFIX/"share").exist?
+    FileUtils.rm_r(HOMEBREW_PREFIX/"etc") if (HOMEBREW_PREFIX/"etc").exist?
+    FileUtils.rm_r(HOMEBREW_PREFIX/"share") if (HOMEBREW_PREFIX/"share").exist?
   end
 
-  specify "#link_completions_and_manpages" do
+  specify "#link_completions_and_manpages when completions are enabled for non-official tap" do
     setup_tap_files
     setup_git_repo
-    tap = described_class.new("Homebrew", "baz")
-    tap.install clone_target: subject.path/".git"
+    setup_completion link: true
+    tap = described_class.fetch("NotHomebrew", "baz")
+    tap.install clone_target: homebrew_foo_tap.path/".git"
     (HOMEBREW_PREFIX/"share/man/man1/brew-tap-cmd.1").delete
     (HOMEBREW_PREFIX/"etc/bash_completion.d/brew-tap-cmd").delete
     (HOMEBREW_PREFIX/"share/zsh/site-functions/_brew-tap-cmd").delete
@@ -300,72 +436,392 @@ describe Tap do
     expect(HOMEBREW_PREFIX/"share/fish/vendor_completions.d/brew-tap-cmd.fish").to be_a_file
     tap.uninstall
   ensure
-    (HOMEBREW_PREFIX/"etc").rmtree if (HOMEBREW_PREFIX/"etc").exist?
-    (HOMEBREW_PREFIX/"share").rmtree if (HOMEBREW_PREFIX/"share").exist?
+    FileUtils.rm_r(HOMEBREW_PREFIX/"etc") if (HOMEBREW_PREFIX/"etc").exist?
+    FileUtils.rm_r(HOMEBREW_PREFIX/"share") if (HOMEBREW_PREFIX/"share").exist?
   end
 
-  specify "#pin and #unpin" do
-    expect(subject).not_to be_pinned
-    expect { subject.unpin }.to raise_error(TapPinStatusError)
-    subject.pin
-    expect(subject).to be_pinned
-    expect { subject.pin }.to raise_error(TapPinStatusError)
-    subject.unpin
-    expect(subject).not_to be_pinned
+  specify "#link_completions_and_manpages when completions are disabled for non-official tap" do
+    setup_tap_files
+    setup_git_repo
+    setup_completion link: false
+    tap = described_class.fetch("NotHomebrew", "baz")
+    tap.install clone_target: homebrew_foo_tap.path/".git"
+    (HOMEBREW_PREFIX/"share/man/man1/brew-tap-cmd.1").delete
+    tap.link_completions_and_manpages
+    expect(HOMEBREW_PREFIX/"share/man/man1/brew-tap-cmd.1").to be_a_file
+    expect(HOMEBREW_PREFIX/"etc/bash_completion.d/brew-tap-cmd").not_to be_a_file
+    expect(HOMEBREW_PREFIX/"share/zsh/site-functions/_brew-tap-cmd").not_to be_a_file
+    expect(HOMEBREW_PREFIX/"share/fish/vendor_completions.d/brew-tap-cmd.fish").not_to be_a_file
+    tap.uninstall
+  ensure
+    FileUtils.rm_r(HOMEBREW_PREFIX/"etc") if (HOMEBREW_PREFIX/"etc").exist?
+    FileUtils.rm_r(HOMEBREW_PREFIX/"share") if (HOMEBREW_PREFIX/"share").exist?
+  end
+
+  specify "#link_completions_and_manpages when completions are enabled for official tap" do
+    setup_tap_files
+    setup_git_repo
+    setup_completion link: false
+    tap = described_class.fetch("Homebrew", "baz")
+    tap.install clone_target: homebrew_foo_tap.path/".git"
+    (HOMEBREW_PREFIX/"share/man/man1/brew-tap-cmd.1").delete
+    (HOMEBREW_PREFIX/"etc/bash_completion.d/brew-tap-cmd").delete
+    (HOMEBREW_PREFIX/"share/zsh/site-functions/_brew-tap-cmd").delete
+    (HOMEBREW_PREFIX/"share/fish/vendor_completions.d/brew-tap-cmd.fish").delete
+    tap.link_completions_and_manpages
+    expect(HOMEBREW_PREFIX/"share/man/man1/brew-tap-cmd.1").to be_a_file
+    expect(HOMEBREW_PREFIX/"etc/bash_completion.d/brew-tap-cmd").to be_a_file
+    expect(HOMEBREW_PREFIX/"share/zsh/site-functions/_brew-tap-cmd").to be_a_file
+    expect(HOMEBREW_PREFIX/"share/fish/vendor_completions.d/brew-tap-cmd.fish").to be_a_file
+    tap.uninstall
+  ensure
+    FileUtils.rm_r(HOMEBREW_PREFIX/"etc") if (HOMEBREW_PREFIX/"etc").exist?
+    FileUtils.rm_r(HOMEBREW_PREFIX/"share") if (HOMEBREW_PREFIX/"share").exist?
   end
 
   specify "#config" do
     setup_git_repo
 
-    expect(subject.config["foo"]).to be nil
-    subject.config["foo"] = "bar"
-    expect(subject.config["foo"]).to eq("bar")
-    subject.config["foo"] = nil
-    expect(subject.config["foo"]).to be nil
+    expect(homebrew_foo_tap.config[:foo]).to be_nil
+    homebrew_foo_tap.config[:foo] = true
+    expect(homebrew_foo_tap.config[:foo]).to be true
+    homebrew_foo_tap.config.delete(:foo)
+    expect(homebrew_foo_tap.config[:foo]).to be_nil
   end
 
-  describe "#each" do
+  describe ".each" do
     it "returns an enumerator if no block is passed" do
       expect(described_class.each).to be_an_instance_of(Enumerator)
     end
-  end
-end
 
-describe CoreTap do
-  specify "attributes" do
-    expect(subject.user).to eq("Homebrew")
-    expect(subject.repo).to eq("core")
-    expect(subject.name).to eq("homebrew/core")
-    expect(subject.command_files).to eq([])
-    expect(subject).to be_installed
-    expect(subject).not_to be_pinned
-    expect(subject).to be_official
-    expect(subject).to be_a_core_tap
-  end
-
-  specify "forbidden operations" do
-    expect { subject.uninstall }.to raise_error(RuntimeError)
-    expect { subject.pin }.to raise_error(RuntimeError)
-    expect { subject.unpin }.to raise_error(RuntimeError)
-  end
-
-  specify "files" do
-    formula_file = subject.formula_dir/"foo.rb"
-    formula_file.write <<~RUBY
-      class Foo < Formula
-        url "https://brew.sh/foo-1.0.tar.gz"
+    context "when the core tap is not installed" do
+      around do |example|
+        FileUtils.rm_rf CoreTap.instance.path
+        example.run
+      ensure
+        (CoreTap.instance.path/"Formula").mkpath
       end
-    RUBY
 
-    alias_file = subject.alias_dir/"bar"
-    alias_file.parent.mkpath
-    ln_s formula_file, alias_file
+      it "includes the core tap with the api" do
+        expect(described_class.to_a).to include(CoreTap.instance)
+      end
 
-    expect(subject.formula_files).to eq([formula_file])
-    expect(subject.formula_names).to eq(["foo"])
-    expect(subject.alias_files).to eq([alias_file])
-    expect(subject.aliases).to eq(["bar"])
-    expect(subject.alias_table).to eq("bar" => "foo")
-    expect(subject.alias_reverse_table).to eq("foo" => ["bar"])
+      it "omits the core tap without the api", :no_api do
+        expect(described_class.to_a).not_to include(CoreTap.instance)
+      end
+    end
+  end
+
+  describe ".installed" do
+    it "includes only installed taps" do
+      expect(described_class.installed)
+        .to contain_exactly(CoreTap.instance, described_class.fetch("homebrew/foo"))
+    end
+  end
+
+  describe ".all" do
+    it "includes the core and cask taps by default", :needs_macos do
+      expect(described_class.all).to contain_exactly(
+        CoreTap.instance,
+        CoreCaskTap.instance,
+        described_class.fetch("homebrew/foo"),
+        described_class.fetch("third-party/tap"),
+      )
+    end
+
+    it "includes the core tap and excludes the cask tap by default", :needs_linux do
+      expect(described_class.all)
+        .to contain_exactly(CoreTap.instance, described_class.fetch("homebrew/foo"))
+    end
+  end
+
+  describe "Formula Lists" do
+    describe "#formula_renames" do
+      it "returns the formula_renames hash" do
+        setup_tap_files
+
+        expected_result = { "oldname" => "foo" }
+        expect(homebrew_foo_tap.formula_renames).to eq expected_result
+      end
+    end
+
+    describe "#tap_migrations" do
+      it "returns the tap_migrations hash" do
+        setup_tap_files
+
+        expected_result = { "removed-formula" => "homebrew/foo" }
+        expect(homebrew_foo_tap.tap_migrations).to eq expected_result
+      end
+    end
+
+    describe "tap migration renames" do
+      before do
+        (path/"tap_migrations.json").write <<~JSON
+          {
+            "adobe-air-sdk": "homebrew/cask",
+            "app-engine-go-32": "homebrew/cask/google-cloud-sdk",
+            "app-engine-go-64": "homebrew/cask/google-cloud-sdk",
+            "gimp": "homebrew/cask",
+            "horndis": "homebrew/cask",
+            "inkscape": "homebrew/cask",
+            "schismtracker": "homebrew/cask/schism-tracker"
+          }
+        JSON
+      end
+
+      describe "#reverse_tap_migration_renames" do
+        it "returns the expected hash" do
+          expect(homebrew_foo_tap.reverse_tap_migrations_renames).to eq({
+            "homebrew/cask/google-cloud-sdk" => %w[app-engine-go-32 app-engine-go-64],
+            "homebrew/cask/schism-tracker"   => %w[schismtracker],
+          })
+        end
+      end
+
+      describe ".tap_migration_oldnames" do
+        let(:cask_tap) { CoreCaskTap.instance }
+        let(:core_tap) { CoreTap.instance }
+
+        it "returns expected renames", :no_api do
+          [
+            [cask_tap, "gimp", []],
+            [core_tap, "schism-tracker", []],
+            [cask_tap, "schism-tracker", %w[schismtracker]],
+            [cask_tap, "google-cloud-sdk", %w[app-engine-go-32 app-engine-go-64]],
+          ].each do |tap, name, result|
+            expect(described_class.tap_migration_oldnames(tap, name)).to eq(result)
+          end
+        end
+      end
+    end
+
+    describe "#audit_exceptions" do
+      it "returns the audit_exceptions hash" do
+        setup_tap_files
+
+        expected_result = {
+          formula_list: ["foo", "bar"],
+          formula_hash: { "foo" => "foo1", "bar" => "bar1" },
+        }
+        expect(homebrew_foo_tap.audit_exceptions).to eq expected_result
+      end
+    end
+
+    describe "#style_exceptions" do
+      it "returns the style_exceptions hash" do
+        setup_tap_files
+
+        expected_result = {
+          formula_list: ["foo", "bar"],
+          formula_hash: { "foo" => "foo1", "bar" => "bar1" },
+        }
+        expect(homebrew_foo_tap.style_exceptions).to eq expected_result
+      end
+    end
+
+    describe "#pypi_formula_mappings" do
+      it "returns the pypi_formula_mappings hash" do
+        setup_tap_files
+
+        expected_result = {
+          "formula1" => "foo",
+          "formula2" => {
+            "package_name"     => "foo",
+            "extra_packages"   => ["bar"],
+            "exclude_packages" => ["baz"],
+          },
+        }
+        expect(homebrew_foo_tap.pypi_formula_mappings).to eq expected_result
+      end
+    end
+
+    describe "#formula_file?" do
+      it "matches files from Formula/" do
+        tap = described_class.fetch("hard/core")
+        FileUtils.mkdir_p(tap.path/"Formula")
+
+        %w[
+          kvazaar.rb
+          Casks/kvazaar.rb
+          Casks/k/kvazaar.rb
+          Formula/kvazaar.sh
+          HomebrewFormula/kvazaar.rb
+          HomebrewFormula/k/kvazaar.rb
+        ].each do |relative_path|
+          expect(tap).not_to have_formula_file(relative_path)
+        end
+
+        %w[
+          Formula/kvazaar.rb
+          Formula/k/kvazaar.rb
+        ].each do |relative_path|
+          expect(tap).to have_formula_file(relative_path)
+        end
+      ensure
+        FileUtils.rm_rf(tap.path.parent) if tap
+      end
+
+      it "matches files from HomebrewFormula/" do
+        tap = described_class.fetch("hard/core")
+        FileUtils.mkdir_p(tap.path/"HomebrewFormula")
+
+        %w[
+          kvazaar.rb
+          Casks/kvazaar.rb
+          Casks/k/kvazaar.rb
+          Formula/kvazaar.rb
+          Formula/k/kvazaar.rb
+          HomebrewFormula/kvazaar.sh
+        ].each do |relative_path|
+          expect(tap).not_to have_formula_file(relative_path)
+        end
+
+        %w[
+          HomebrewFormula/kvazaar.rb
+          HomebrewFormula/k/kvazaar.rb
+        ].each do |relative_path|
+          expect(tap).to have_formula_file(relative_path)
+        end
+      ensure
+        FileUtils.rm_rf(tap.path.parent) if tap
+      end
+
+      it "matches files from the top-level directory" do
+        tap = described_class.fetch("hard/core")
+        FileUtils.mkdir_p(tap.path)
+
+        %w[
+          kvazaar.sh
+          Casks/kvazaar.rb
+          Casks/k/kvazaar.rb
+          Formula/kvazaar.rb
+          Formula/k/kvazaar.rb
+          HomebrewFormula/kvazaar.rb
+          HomebrewFormula/k/kvazaar.rb
+        ].each do |relative_path|
+          expect(tap).not_to have_formula_file(relative_path)
+        end
+
+        expect(tap).to have_formula_file("kvazaar.rb")
+      ensure
+        FileUtils.rm_rf(tap.path.parent) if tap
+      end
+    end
+
+    describe "#cask_file?" do
+      it "matches files from Casks/" do
+        tap = described_class.fetch("hard/core")
+
+        %w[
+          kvazaar.rb
+          Casks/kvazaar.sh
+          Formula/kvazaar.rb
+          Formula/k/kvazaar.rb
+          HomebrewFormula/kvazaar.rb
+          HomebrewFormula/k/kvazaar.rb
+        ].each do |relative_path|
+          expect(tap).not_to have_cask_file(relative_path)
+        end
+
+        %w[
+          Casks/kvazaar.rb
+          Casks/k/kvazaar.rb
+        ].each do |relative_path|
+          expect(tap).to have_cask_file(relative_path)
+        end
+      end
+    end
+  end
+
+  describe CoreTap do
+    subject(:core_tap) { described_class.instance }
+
+    specify "attributes" do
+      expect(core_tap.user).to eq("Homebrew")
+      expect(core_tap.repository).to eq("core")
+      expect(core_tap.name).to eq("homebrew/core")
+      expect(core_tap.command_files).to eq([])
+      expect(core_tap).to be_installed
+      expect(core_tap).to be_official
+      expect(core_tap).to be_a_core_tap
+    end
+
+    specify "forbidden operations", :no_api do
+      expect { core_tap.uninstall }.to raise_error(RuntimeError)
+    end
+
+    specify "files", :no_api do
+      path = HOMEBREW_TAP_DIRECTORY/"homebrew/homebrew-core"
+      formula_file = core_tap.formula_dir/"foo.rb"
+      core_tap.formula_dir.mkpath
+      formula_file.write <<~RUBY
+        class Foo < Formula
+          url "https://brew.sh/foo-1.0.tar.gz"
+        end
+      RUBY
+
+      formula_list_file_json = '{ "foo": "foo1", "bar": "bar1" }'
+      formula_list_file_contents = { "foo" => "foo1", "bar" => "bar1" }
+      %w[
+        formula_renames.json
+        tap_migrations.json
+        audit_exceptions/formula_list.json
+        style_exceptions/formula_hash.json
+        pypi_formula_mappings.json
+      ].each do |file|
+        (path/file).dirname.mkpath
+        (path/file).write formula_list_file_json
+      end
+
+      alias_file = core_tap.alias_dir/"bar"
+      alias_file.parent.mkpath
+      ln_s formula_file, alias_file
+
+      expect(core_tap.formula_files).to eq([formula_file])
+      expect(core_tap.formula_names).to eq(["foo"])
+      expect(core_tap.alias_files).to eq([alias_file])
+      expect(core_tap.aliases).to eq(["bar"])
+      expect(core_tap.alias_table).to eq("bar" => "foo")
+      expect(core_tap.alias_reverse_table).to eq("foo" => ["bar"])
+
+      expect(core_tap.formula_renames).to eq formula_list_file_contents
+      expect(core_tap.tap_migrations).to eq formula_list_file_contents
+      expect(core_tap.audit_exceptions).to eq({ formula_list: formula_list_file_contents })
+      expect(core_tap.style_exceptions).to eq({ formula_hash: formula_list_file_contents })
+      expect(core_tap.pypi_formula_mappings).to eq formula_list_file_contents
+    end
+  end
+
+  describe "#repository_var_suffix" do
+    it "converts the repo directory to an environment variable suffix" do
+      expect(CoreTap.instance.repository_var_suffix).to eq "_HOMEBREW_HOMEBREW_CORE"
+    end
+
+    it "converts non-alphanumeric characters to underscores" do
+      expect(described_class.fetch("my",
+                                   "tap-with-dashes").repository_var_suffix).to eq "_MY_HOMEBREW_TAP_WITH_DASHES"
+      expect(described_class.fetch("my",
+                                   "tap-with-@-symbol").repository_var_suffix).to eq "_MY_HOMEBREW_TAP_WITH___SYMBOL"
+    end
+  end
+
+  describe "::with_formula_name" do
+    it "returns the tap and formula name when given a full name" do
+      expect(described_class.with_formula_name("homebrew/core/gcc")).to eq [CoreTap.instance, "gcc"]
+    end
+
+    it "returns nil when given a relative path" do
+      expect(described_class.with_formula_name("./Formula/gcc.rb")).to be_nil
+    end
+  end
+
+  describe "::with_cask_token" do
+    it "returns the tap and cask token when given a full token" do
+      expect(described_class.with_cask_token("homebrew/cask/alfred")).to eq [CoreCaskTap.instance, "alfred"]
+    end
+
+    it "returns nil when given a relative path" do
+      expect(described_class.with_cask_token("./Casks/alfred.rb")).to be_nil
+    end
   end
 end

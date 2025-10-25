@@ -1,30 +1,41 @@
+# typed: strict
 # frozen_string_literal: true
 
-require "extend/hash_validator"
-using HashValidator
+require "delegate"
+require "extend/hash/keys"
+require "utils/output"
 
 module Cask
   class DSL
-    class ConflictsWith < DelegateClass(Hash)
-      VALID_KEYS = [
+    # Class corresponding to the `conflicts_with` stanza.
+    class ConflictsWith < SimpleDelegator
+      VALID_KEYS = [:cask].freeze
+
+      ODEPRECATED_KEYS = [
         :formula,
-        :cask,
         :macos,
         :arch,
         :x11,
         :java,
       ].freeze
 
-      def initialize(**pairs)
-        pairs.assert_valid_keys!(*VALID_KEYS)
+      sig { params(options: T.anything).void }
+      def initialize(**options)
+        options.assert_valid_keys(*VALID_KEYS, *ODEPRECATED_KEYS)
 
-        super(pairs.transform_values { |v| Set.new([*v]) })
+        options.keys.intersection(ODEPRECATED_KEYS).each do |key|
+          ::Utils::Output.odeprecated "conflicts_with #{key}:"
+        end
 
-        self.default = Set.new
+        conflicts = options.transform_values { |v| Set.new(Kernel.Array(v)) }
+        conflicts.default = Set.new
+
+        super(conflicts)
       end
 
+      sig { params(generator: T.anything).returns(String) }
       def to_json(generator)
-        transform_values(&:to_a).to_json(generator)
+        __getobj__.transform_values(&:to_a).to_json(generator)
       end
     end
   end

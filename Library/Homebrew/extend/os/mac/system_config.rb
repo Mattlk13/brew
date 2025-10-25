@@ -1,56 +1,50 @@
+# typed: true # rubocop:disable Sorbet/StrictSigil
 # frozen_string_literal: true
 
-class SystemConfig
-  class << self
-    undef describe_java, describe_homebrew_ruby
+require "system_command"
 
-    def describe_java
-      # java_home doesn't exist on all macOSs; it might be missing on older versions.
-      return "N/A" unless File.executable? "/usr/libexec/java_home"
+module OS
+  module Mac
+    module SystemConfig
+      module ClassMethods
+        extend T::Helpers
 
-      out, _, status = system_command("/usr/libexec/java_home", args: ["--xml", "--failfast"], print_stderr: false)
-      return "N/A" unless status.success?
+        requires_ancestor { T.class_of(::SystemConfig) }
 
-      javas = []
-      xml = REXML::Document.new(out)
-      REXML::XPath.each(xml, "//key[text()='JVMVersion']/following-sibling::string") do |item|
-        javas << item.text
+        sig { returns(String) }
+        def describe_clang
+          return "N/A" if ::SystemConfig.clang.null?
+
+          clang_build_info = ::SystemConfig.clang_build.null? ? "(parse error)" : ::SystemConfig.clang_build
+          "#{::SystemConfig.clang} build #{clang_build_info}"
+        end
+
+        def xcode
+          @xcode ||= if MacOS::Xcode.installed?
+            xcode = MacOS::Xcode.version.to_s
+            xcode += " => #{MacOS::Xcode.prefix}" unless MacOS::Xcode.default_prefix?
+            xcode
+          end
+        end
+
+        def clt
+          @clt ||= MacOS::CLT.version if MacOS::CLT.installed?
+        end
+
+        def core_tap_config(out = $stdout)
+          dump_tap_config(CoreTap.instance, out)
+          dump_tap_config(CoreCaskTap.instance, out)
+        end
+
+        def dump_verbose_config(out = $stdout)
+          super
+          out.puts "macOS: #{MacOS.full_version}-#{kernel}"
+          out.puts "CLT: #{clt || "N/A"}"
+          out.puts "Xcode: #{xcode || "N/A"}"
+          out.puts "Rosetta 2: #{::Hardware::CPU.in_rosetta2?}" if ::Hardware::CPU.physical_cpu_arm64?
+        end
       end
-      javas.uniq.join(", ")
-    end
-
-    def describe_homebrew_ruby
-      s = describe_homebrew_ruby_version
-
-      if !RUBY_PATH.to_s.match?(%r{^/System/Library/Frameworks/Ruby\.framework/Versions/[12]\.[089]/usr/bin/ruby})
-        "#{s} => #{RUBY_PATH}"
-      else
-        s
-      end
-    end
-
-    def xcode
-      @xcode ||= if MacOS::Xcode.installed?
-        xcode = MacOS::Xcode.version.to_s
-        xcode += " => #{MacOS::Xcode.prefix}" unless MacOS::Xcode.default_prefix?
-        xcode
-      end
-    end
-
-    def clt
-      @clt ||= MacOS::CLT.version if MacOS::CLT.installed?
-    end
-
-    def xquartz
-      @xquartz ||= "#{MacOS::XQuartz.version} => #{describe_path(MacOS::XQuartz.prefix)}" if MacOS::XQuartz.installed?
-    end
-
-    def dump_verbose_config(f = $stdout)
-      dump_generic_verbose_config(f)
-      f.puts "macOS: #{MacOS.full_version}-#{kernel}"
-      f.puts "CLT: #{clt || "N/A"}"
-      f.puts "Xcode: #{xcode || "N/A"}"
-      f.puts "XQuartz: #{xquartz}" if xquartz
     end
   end
 end
+SystemConfig.singleton_class.prepend(OS::Mac::SystemConfig::ClassMethods)

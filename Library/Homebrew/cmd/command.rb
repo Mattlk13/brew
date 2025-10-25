@@ -1,31 +1,28 @@
+# typed: strict
 # frozen_string_literal: true
 
+require "abstract_command"
 require "commands"
-require "cli/parser"
 
 module Homebrew
-  module_function
+  module Cmd
+    class Command < AbstractCommand
+      cmd_args do
+        description <<~EOS
+          Display the path to the file being used when invoking `brew` <cmd>.
+        EOS
 
-  def command_args
-    Homebrew::CLI::Parser.new do
-      usage_banner <<~EOS
-        `command` <cmd>
+        named_args :command, min: 1
+      end
 
-        Display the path to the file being used when invoking `brew` <cmd>.
-      EOS
-      switch :verbose
-      switch :debug
-      min_named 1
-    end
-  end
-
-  def command
-    command_args.parse
-
-    args.named.each do |cmd|
-      path = Commands.path(cmd)
-      odie "Unknown command: #{cmd}" unless path
-      puts path
+      sig { override.void }
+      def run
+        args.named.each do |cmd|
+          path = Commands.path(cmd)
+          odie "Unknown command: brew #{cmd}" unless path
+          puts path
+        end
+      end
     end
   end
 end

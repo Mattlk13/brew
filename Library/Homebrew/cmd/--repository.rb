@@ -1,29 +1,26 @@
+# typed: strict
 # frozen_string_literal: true
 
-require "cli/parser"
+require "abstract_command"
+require "shell_command"
 
 module Homebrew
-  module_function
+  module Cmd
+    class Repository < AbstractCommand
+      include ShellCommand
 
-  def __repository_args
-    Homebrew::CLI::Parser.new do
-      usage_banner <<~EOS
-        `--repository`, `--repo` [<user>`/`<repo>]
+      sig { override.returns(String) }
+      def self.command_name = "--repository"
 
-        Display where Homebrew's `.git` directory is located.
+      cmd_args do
+        description <<~EOS
+          Display where Homebrew's Git repository is located.
 
-        If <user>`/`<repo> are provided, display where tap <user>`/`<repo>'s directory is located.
-      EOS
-    end
-  end
+          If <user>`/`<repo> are provided, display where tap <user>`/`<repo>'s directory is located.
+        EOS
 
-  def __repository
-    __repository_args.parse
-
-    if args.no_named?
-      puts HOMEBREW_REPOSITORY
-    else
-      puts args.named.map { |tap| Tap.fetch(tap).path }
+        named_args :tap
+      end
     end
   end
 end

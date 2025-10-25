@@ -1,11 +1,22 @@
+# typed: true # rubocop:todo Sorbet/StrictSigil
 # frozen_string_literal: true
 
 require "options"
 
+# Shared functions for classes which can be depended upon.
 module Dependable
-  # `:run` and `:linked` are no longer used but keep them here to avoid them being
-  # misused in future.
-  RESERVED_TAGS = [:build, :optional, :recommended, :run, :test, :linked].freeze
+  extend T::Helpers
+
+  # `:run` and `:linked` are no longer used but keep them here to avoid their
+  # misuse in future.
+  RESERVED_TAGS = [:build, :optional, :recommended, :run, :test, :linked, :implicit, :no_linkage].freeze
+
+  attr_reader :tags
+
+  abstract!
+
+  sig { abstract.returns(T::Array[String]) }
+  def option_names; end
 
   def build?
     tags.include? :build
@@ -23,6 +34,14 @@ module Dependable
     tags.include? :test
   end
 
+  def implicit?
+    tags.include? :implicit
+  end
+
+  def no_linkage?
+    tags.include? :no_linkage
+  end
+
   def required?
     !build? && !test? && !optional? && !recommended?
   end
@@ -36,7 +55,7 @@ module Dependable
   end
 
   def prune_from_option?(build)
-    return if !optional? && !recommended?
+    return false if !optional? && !recommended?
 
     build.without?(self)
   end

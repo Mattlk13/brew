@@ -1,11 +1,12 @@
+# typed: strict
 # frozen_string_literal: true
 
 module Cask
+  # Helper functions for the cask cache.
   module Cache
-    module_function
-
-    def path
-      @path ||= HOMEBREW_CACHE/"Cask"
+    sig { returns(Pathname) }
+    def self.path
+      @path ||= T.let(HOMEBREW_CACHE/"Cask", T.nilable(Pathname))
     end
   end
 end

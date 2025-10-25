@@ -1,13 +1,18 @@
+# typed: true # rubocop:todo Sorbet/StrictSigil
 # frozen_string_literal: true
 
 require "keg_relocate"
 require "language/python"
 require "lock_file"
-require "ostruct"
+require "cachable"
+require "utils/output"
 
+# Installation prefix of a formula.
 class Keg
   extend Cachable
+  include Utils::Output::Mixin
 
+  # Error for when a keg is already linked.
   class AlreadyLinkedError < RuntimeError
     def initialize(keg)
       super <<~EOS
@@ -17,6 +22,7 @@ class Keg
     end
   end
 
+  # Error for when a keg cannot be linked.
   class LinkError < RuntimeError
     attr_reader :keg, :src, :dst
 
@@ -30,7 +36,9 @@ class Keg
     end
   end
 
+  # Error for when a file already exists or belongs to another keg.
   class ConflictError < LinkError
+    sig { returns(String) }
     def suggestion
       conflict = Keg.for(dst)
     rescue NotAKegError, Errno::ENOENT
@@ -42,6 +50,7 @@ class Keg
       EOS
     end
 
+    sig { returns(String) }
     def to_s
       s = []
       s << "Could not symlink #{src}"
@@ -51,13 +60,15 @@ class Keg
           brew link --overwrite #{keg.name}
 
         To list all files that would be deleted:
-          brew link --overwrite --dry-run #{keg.name}
+          brew link --overwrite #{keg.name} --dry-run
       EOS
       s.join("\n")
     end
   end
 
+  # Error for when a directory is not writable.
   class DirectoryNotWritableError < LinkError
+    sig { returns(String) }
     def to_s
       <<~EOS
         Could not symlink #{src}
@@ -66,41 +77,9 @@ class Keg
     end
   end
 
-  # locale-specific directories have the form language[_territory][.codeset][@modifier]
-  LOCALEDIR_RX = %r{(locale|man)/([a-z]{2}|C|POSIX)(_[A-Z]{2})?(\.[a-zA-Z\-0-9]+(@.+)?)?}.freeze
-  INFOFILE_RX = %r{info/([^.].*?\.info|dir)$}.freeze
-  KEG_LINK_DIRECTORIES = %w[
-    bin etc include lib sbin share var
-  ].freeze
-  MUST_EXIST_SUBDIRECTORIES = (
-    KEG_LINK_DIRECTORIES - %w[var] + %w[
-      opt
-      var/homebrew/linked
-    ]
-  ).map { |dir| HOMEBREW_PREFIX/dir }.sort.uniq.freeze
-
-  # Keep relatively in sync with
-  # https://github.com/Homebrew/install/blob/master/install
-  MUST_EXIST_DIRECTORIES = (MUST_EXIST_SUBDIRECTORIES + [
-    HOMEBREW_CELLAR,
-  ].sort.uniq).freeze
-  MUST_BE_WRITABLE_DIRECTORIES = (
-    %w[
-      etc/bash_completion.d lib/pkgconfig
-      share/aclocal share/doc share/info share/locale share/man
-      share/man/man1 share/man/man2 share/man/man3 share/man/man4
-      share/man/man5 share/man/man6 share/man/man7 share/man/man8
-      share/zsh share/zsh/site-functions
-      var/log
-    ].map { |dir| HOMEBREW_PREFIX/dir } + MUST_EXIST_SUBDIRECTORIES + [
-      HOMEBREW_CACHE,
-      HOMEBREW_CELLAR,
-      HOMEBREW_LOCKS,
-      HOMEBREW_LOGS,
-      HOMEBREW_REPOSITORY,
-      Language::Python.homebrew_site_packages,
-    ]
-  ).sort.uniq.freeze
+  # Locale-specific directories have the form `language[_territory][.codeset][@modifier]`
+  LOCALEDIR_RX = %r{(locale|man)/([a-z]{2}|C|POSIX)(_[A-Z]{2})?(\.[a-zA-Z\-0-9]+(@.+)?)?}
+  INFOFILE_RX = %r{info/([^.].*?\.info(\.gz)?|dir)$}
 
   # These paths relative to the keg's share directory should always be real
   # directories in the prefix, never symlinks.
@@ -114,93 +93,98 @@ class Keg
     mime-info pixmaps sounds postgresql
   ].freeze
 
-  # Given an array of kegs, this method will try to find some other kegs
-  # that depend on them. If it does, it returns:
-  #
-  # - some kegs in the passed array that have installed dependents
-  # - some installed dependents of those kegs.
-  #
-  # If it doesn't, it returns nil.
-  #
-  # Note that nil will be returned if the only installed dependents
-  # in the passed kegs are other kegs in the array.
-  #
-  # For efficiency, we don't bother trying to get complete data.
-  def self.find_some_installed_dependents(kegs)
-    keg_names = kegs.select(&:optlinked?).map(&:name)
-    keg_formulae = []
-    kegs_by_source = kegs.group_by do |keg|
-      # First, attempt to resolve the keg to a formula
-      # to get up-to-date name and tap information.
-      f = keg.to_formula
-      keg_formulae << f
-      [f.name, f.tap]
-    rescue
-      # If the formula for the keg can't be found,
-      # fall back to the information in the tab.
-      [keg.name, keg.tab.tap]
-    end
+  ELISP_EXTENSIONS = %w[.el .elc].freeze
+  PYC_EXTENSIONS = %w[.pyc .pyo].freeze
+  LIBTOOL_EXTENSIONS = %w[.la .lai].freeze
 
-    all_required_kegs = Set.new
-    all_dependents = []
+  KEEPME_FILE = ".keepme"
 
-    # Don't include dependencies of kegs that were in the given array.
-    formulae_to_check = Formula.installed - keg_formulae
-
-    formulae_to_check.each do |dependent|
-      required = dependent.missing_dependencies(hide: keg_names)
-      required_kegs = required.map do |f|
-        f_kegs = kegs_by_source[[f.name, f.tap]]
-        next unless f_kegs
-
-        f_kegs.max_by(&:version)
-      end.compact
-
-      next if required_kegs.empty?
-
-      all_required_kegs += required_kegs
-      all_dependents << dependent.to_s
-    end
-
-    return if all_required_kegs.empty?
-    return if all_dependents.empty?
-
-    [all_required_kegs.to_a, all_dependents.sort]
-  end
-
-  # if path is a file in a keg then this will return the containing Keg object
+  # @param path if this is a file in a keg, returns the containing {Keg} object.
   def self.for(path)
-    path = path.realpath
-    until path.root?
-      return Keg.new(path) if path.parent.parent == HOMEBREW_CELLAR.realpath
+    original_path = path
+    raise Errno::ENOENT, original_path.to_s unless original_path.exist?
 
-      path = path.parent.realpath # realpath() prevents root? failing
+    if (path = original_path.realpath)
+      until path.root?
+        return Keg.new(path) if path.parent.parent == HOMEBREW_CELLAR.realpath
+
+        path = path.parent.realpath # realpath() prevents root? failing
+      end
     end
-    raise NotAKegError, "#{path} is not inside a keg"
+    raise NotAKegError, "#{original_path} is not inside a keg"
   end
 
   def self.all
     Formula.racks.flat_map(&:subdirs).map { |d| new(d) }
   end
 
+  def self.keg_link_directories
+    @keg_link_directories ||= %w[
+      bin etc include lib sbin share var
+    ].freeze
+  end
+
+  def self.must_exist_subdirectories
+    @must_exist_subdirectories ||= (
+    keg_link_directories - %w[var] + %w[
+      opt
+      var/homebrew/linked
+    ]
+  ).map { |dir| HOMEBREW_PREFIX/dir }.sort.uniq.freeze
+  end
+
+  # Keep relatively in sync with
+  # {https://github.com/Homebrew/install/blob/HEAD/install.sh}
+  def self.must_exist_directories
+    @must_exist_directories ||= (must_exist_subdirectories + [
+      HOMEBREW_CELLAR,
+    ].sort.uniq).freeze
+  end
+
+  # Keep relatively in sync with
+  # {https://github.com/Homebrew/install/blob/HEAD/install.sh}
+  def self.must_be_writable_directories
+    @must_be_writable_directories ||= (
+    %w[
+      etc/bash_completion.d lib/pkgconfig
+      share/aclocal share/doc share/info share/locale share/man
+      share/man/man1 share/man/man2 share/man/man3 share/man/man4
+      share/man/man5 share/man/man6 share/man/man7 share/man/man8
+      share/zsh share/zsh/site-functions
+      share/pwsh share/pwsh/completions
+      var/log
+    ].map { |dir| HOMEBREW_PREFIX/dir } + must_exist_subdirectories + [
+      HOMEBREW_CACHE,
+      HOMEBREW_CELLAR,
+      HOMEBREW_LOCKS,
+      HOMEBREW_LOGS,
+      HOMEBREW_REPOSITORY,
+      Language::Python.homebrew_site_packages,
+    ]
+  ).sort.uniq.freeze
+  end
+
   attr_reader :path, :name, :linked_keg_record, :opt_record
+
   protected :path
 
   extend Forwardable
 
   def_delegators :path,
-                 :to_s, :hash, :abv, :disk_usage, :file_count, :directory?, :exist?, :/,
+                 :to_path, :hash, :abv, :disk_usage, :file_count, :directory?, :exist?, :/,
                  :join, :rename, :find
 
+  sig { params(path: Pathname).void }
   def initialize(path)
     path = path.resolved_path if path.to_s.start_with?("#{HOMEBREW_PREFIX}/opt/")
-    raise "#{path} is not a valid keg" unless path.parent.parent.realpath == HOMEBREW_CELLAR.realpath
+    raise "#{path} is not a valid keg" if path.parent.parent.realpath != HOMEBREW_CELLAR.realpath
     raise "#{path} is not a directory" unless path.directory?
 
     @path = path
     @name = path.parent.basename.to_s
     @linked_keg_record = HOMEBREW_LINKED_KEGS/name
     @opt_record = HOMEBREW_PREFIX/"opt/#{name}"
+    @oldname_opt_records = []
     @require_relocation = false
   end
 
@@ -208,8 +192,10 @@ class Keg
     path.parent
   end
 
-  alias to_path to_s
+  sig { returns(String) }
+  def to_s = path.to_s
 
+  sig { returns(String) }
   def inspect
     "#<#{self.class.name}:#{path}>"
   end
@@ -219,11 +205,14 @@ class Keg
   end
   alias eql? ==
 
+  sig { returns(T::Boolean) }
   def empty_installation?
     Pathname.glob("#{path}/*") do |file|
       return false if file.directory? && !file.children.reject(&:ds_store?).empty?
 
       basename = file.basename.to_s
+
+      require "metafiles"
       next if Metafiles.copy?(basename)
       next if %w[.DS_Store INSTALL_RECEIPT.json].include?(basename)
 
@@ -254,6 +243,7 @@ class Keg
 
   def remove_old_aliases
     opt = opt_record.parent
+    linkedkegs = linked_keg_record.parent
 
     tap = begin
       to_formula.tap
@@ -271,24 +261,16 @@ class Keg
       # versioned aliases are handled below
       next if a.match?(/.+@./)
 
-      alias_symlink = opt/a
-      if alias_symlink.symlink? && alias_symlink.exist?
-        alias_symlink.delete if alias_symlink.realpath == opt_record.realpath
-      elsif alias_symlink.symlink? || alias_symlink.exist?
-        alias_symlink.delete
-      end
+      remove_alias_symlink(opt/a, opt_record)
+      remove_alias_symlink(linkedkegs/a, linked_keg_record)
     end
 
     Pathname.glob("#{opt_record}@*").each do |a|
       a = a.basename.to_s
       next if aliases.include?(a)
 
-      alias_symlink = opt/a
-      if alias_symlink.symlink? && alias_symlink.exist?
-        next if rack != alias_symlink.realpath.parent
-      end
-
-      alias_symlink.delete
+      remove_alias_symlink(opt/a, rack)
+      remove_alias_symlink(linkedkegs/a, rack)
     end
   end
 
@@ -297,33 +279,36 @@ class Keg
     opt_record.parent.rmdir_if_possible
   end
 
-  def uninstall
+  def uninstall(raise_failures: false)
     CacheStoreDatabase.use(:linkage) do |db|
       break unless db.created?
 
       LinkageCacheStore.new(path, db).delete!
     end
 
-    path.rmtree
+    FileUtils.rm_r(path)
     path.parent.rmdir_if_possible
     remove_opt_record if optlinked?
+    remove_linked_keg_record if linked?
     remove_old_aliases
-    remove_oldname_opt_record
+    remove_oldname_opt_records
   rescue Errno::EACCES, Errno::ENOTEMPTY
+    raise if raise_failures
+
     odie <<~EOS
       Could not remove #{name} keg! Do so manually:
         sudo rm -rf #{path}
     EOS
   end
 
-  def unlink(mode = OpenStruct.new)
+  def unlink(verbose: false, dry_run: false)
     ObserverPathnameExtension.reset_counts!
 
     dirs = []
 
-    KEG_LINK_DIRECTORIES.map { |d| path/d }.each do |dir|
-      next unless dir.exist?
-
+    keg_directories = self.class.keg_link_directories.map { |d| path/d }
+                          .select(&:exist?)
+    keg_directories.each do |dir|
       dir.find do |src|
         dst = HOMEBREW_PREFIX + src.relative_path_from(path)
         dst.extend(ObserverPathnameExtension)
@@ -331,9 +316,10 @@ class Keg
         dirs << dst if dst.directory? && !dst.symlink?
 
         # check whether the file to be unlinked is from the current keg first
-        next unless dst.symlink? && src == dst.resolved_path
+        next unless dst.symlink?
+        next if src != dst.resolved_path
 
-        if mode.dry_run
+        if dry_run
           puts dst
           Find.prune if src.directory?
           next
@@ -341,14 +327,14 @@ class Keg
 
         dst.uninstall_info if dst.to_s.match?(INFOFILE_RX)
         dst.unlink
-        remove_old_aliases
         Find.prune if src.directory?
       end
     end
 
-    unless mode.dry_run
+    unless dry_run
+      remove_old_aliases
       remove_linked_keg_record if linked?
-      dirs.reverse_each(&:rmdir_if_possible)
+      (dirs - self.class.must_exist_subdirectories).reverse_each(&:rmdir_if_possible)
     end
 
     ObserverPathnameExtension.n
@@ -356,21 +342,24 @@ class Keg
 
   def lock
     FormulaLock.new(name).with_lock do
-      if oldname_opt_record
-        FormulaLock.new(oldname_opt_record.basename.to_s).with_lock { yield }
-      else
-        yield
+      oldname_locks = oldname_opt_records.map do |record|
+        FormulaLock.new(record.basename.to_s)
       end
+      oldname_locks.each(&:lock)
+      yield
+    ensure
+      oldname_locks&.each(&:unlock)
     end
   end
 
   def completion_installed?(shell)
     dir = case shell
     when :bash then path/"etc/bash_completion.d"
+    when :fish then path/"share/fish/vendor_completions.d"
     when :zsh
       dir = path/"share/zsh/site-functions"
       dir if dir.directory? && dir.children.any? { |f| f.basename.to_s.start_with?("_") }
-    when :fish then path/"share/fish/vendor_completions.d"
+    when :pwsh then path/"share/pwsh/completions"
     end
     dir&.directory? && !dir.children.empty?
   end
@@ -388,18 +377,12 @@ class Keg
     end
   end
 
+  sig { returns(T::Boolean) }
   def plist_installed?
     !Dir["#{path}/*.plist"].empty?
   end
 
-  def python_site_packages_installed?
-    (path/"lib/python2.7/site-packages").directory?
-  end
-
-  def python_pth_files_installed?
-    !Dir["#{path}/lib/python2.7/site-packages/*.pth"].empty?
-  end
-
+  sig { returns(T::Array[Pathname]) }
   def apps
     app_prefix = optlinked? ? opt_record : path
     Pathname.glob("#{app_prefix}/{,libexec/}*.app")
@@ -408,85 +391,112 @@ class Keg
   def elisp_installed?
     return false unless (path/"share/emacs/site-lisp"/name).exist?
 
-    (path/"share/emacs/site-lisp"/name).children.any? { |f| %w[.el .elc].include? f.extname }
+    (path/"share/emacs/site-lisp"/name).children.any? { |f| ELISP_EXTENSIONS.include? f.extname }
   end
 
+  sig { returns(PkgVersion) }
   def version
     require "pkg_version"
     PkgVersion.parse(path.basename.to_s)
+  end
+
+  def version_scheme
+    @version_scheme ||= tab.version_scheme
+  end
+
+  # For ordering kegs by version with `.sort_by`, `.max_by`, etc.
+  # @see Formula.version_scheme
+  def scheme_and_version
+    [version_scheme, version]
   end
 
   def to_formula
     Formulary.from_keg(self)
   end
 
-  def oldname_opt_record
-    @oldname_opt_record ||= if (opt_dir = HOMEBREW_PREFIX/"opt").directory?
-      opt_dir.subdirs.find do |dir|
+  def oldname_opt_records
+    return @oldname_opt_records unless @oldname_opt_records.empty?
+
+    @oldname_opt_records = if (opt_dir = HOMEBREW_PREFIX/"opt").directory?
+      opt_dir.subdirs.select do |dir|
         dir.symlink? && dir != opt_record && path.parent == dir.resolved_path.parent
       end
+    else
+      []
     end
   end
 
-  def link(mode = OpenStruct.new)
+  def link(verbose: false, dry_run: false, overwrite: false)
     raise AlreadyLinkedError, self if linked_keg_record.directory?
 
     ObserverPathnameExtension.reset_counts!
 
-    optlink(mode) unless mode.dry_run
+    optlink(verbose:, dry_run:, overwrite:) unless dry_run
 
     # yeah indeed, you have to force anything you need in the main tree into
     # these dirs REMEMBER that *NOT* everything needs to be in the main tree
-    link_dir("etc", mode) { :mkpath }
-    link_dir("bin", mode) { :skip_dir }
-    link_dir("sbin", mode) { :skip_dir }
-    link_dir("include", mode) { :link }
-
-    link_dir("share", mode) do |relative_path|
+    link_dir("etc", verbose:, dry_run:, overwrite:) { :mkpath }
+    link_dir("bin", verbose:, dry_run:, overwrite:) { :skip_dir }
+    link_dir("sbin", verbose:, dry_run:, overwrite:) { :skip_dir }
+    link_dir("include", verbose:, dry_run:, overwrite:) do |relative_path|
       case relative_path.to_s
-      when "locale/locale.alias" then :skip_file
+      when /^postgresql@\d+/
+        :mkpath
+      else
+        :link
+      end
+    end
+
+    link_dir("share", verbose:, dry_run:, overwrite:) do |relative_path|
+      case relative_path.to_s
       when INFOFILE_RX then :info
-      when LOCALEDIR_RX then :mkpath
-      when %r{^icons/.*/icon-theme\.cache$} then :skip_file
-      # all icons subfolders should also mkpath
-      when %r{^icons/} then :mkpath
-      when /^zsh/ then :mkpath
-      when /^fish/ then :mkpath
-      # Lua, Lua51, Lua53 all need the same handling.
-      when %r{^lua/} then :mkpath
-      when %r{^guile/} then :mkpath
-      when *SHARE_PATHS then :mkpath
-      else :link
+      when "locale/locale.alias",
+           %r{^icons/.*/icon-theme\.cache$}
+        :skip_file
+      when LOCALEDIR_RX,
+           %r{^icons/}, # all icons subfolders should also mkpath
+           /^zsh/,
+           /^fish/,
+           %r{^lua/}, #  Lua, Lua51, Lua53 all need the same handling.
+           %r{^guile/},
+           /^postgresql@\d+/,
+           /^pypy/,
+           *SHARE_PATHS
+        :mkpath
+      else
+        :link
       end
     end
 
-    link_dir("lib", mode) do |relative_path|
+    link_dir("lib", verbose:, dry_run:, overwrite:) do |relative_path|
       case relative_path.to_s
-      when "charset.alias" then :skip_file
-      # pkg-config database gets explicitly created
-      when "pkgconfig" then :mkpath
-      # cmake database gets explicitly created
-      when "cmake" then :mkpath
-      # lib/language folders also get explicitly created
-      when "dtrace" then :mkpath
-      when /^gdk-pixbuf/ then :mkpath
-      when "ghc" then :mkpath
-      when /^gio/ then :mkpath
-      when "lua" then :mkpath
-      when /^mecab/ then :mkpath
-      when /^node/ then :mkpath
-      when /^ocaml/ then :mkpath
-      when /^perl5/ then :mkpath
-      when "php" then :mkpath
-      when /^python[23]\.\d/ then :mkpath
-      when /^R/ then :mkpath
-      when /^ruby/ then :mkpath
-      # Everything else is symlinked to the cellar
-      else :link
+      when "charset.alias"
+        :skip_file
+      when "pkgconfig", # pkg-config database gets explicitly created
+           "cmake",     # cmake database gets explicitly created
+           "dtrace",    # lib/language folders also get explicitly created
+           /^gdk-pixbuf/,
+           "ghc",
+           /^gio/,
+           /^lua/,
+           /^mecab/,
+           /^node/,
+           /^ocaml/,
+           /^perl5/,
+           "php",
+           /^postgresql@\d+/,
+           /^pypy/,
+           /^python[23]\.\d+/,
+           /^R/,
+           /^ruby/
+        :mkpath
+      else
+        # Everything else is symlinked to the Cellar
+        :link
       end
     end
 
-    link_dir("Frameworks", mode) do |relative_path|
+    link_dir("Frameworks", verbose:, dry_run:, overwrite:) do |relative_path|
       # Frameworks contain symlinks pointing into a subdir, so we have to use
       # the :link strategy. However, for Foo.framework and
       # Foo.framework/Versions we have to use :mkpath so that multiple formulae
@@ -497,24 +507,29 @@ class Keg
         :link
       end
     end
-
-    make_relative_symlink(linked_keg_record, path, mode) unless mode.dry_run
+    make_relative_symlink(linked_keg_record, path, verbose:, dry_run:, overwrite:) unless dry_run
   rescue LinkError
-    unlink
+    unlink(verbose:)
     raise
   else
     ObserverPathnameExtension.n
   end
 
-  def remove_oldname_opt_record
-    return unless oldname_opt_record
-    return unless oldname_opt_record.resolved_path == path
+  def prepare_debug_symbols; end
 
-    @oldname_opt_record.unlink
-    @oldname_opt_record.parent.rmdir_if_possible
-    @oldname_opt_record = nil
+  def consistent_reproducible_symlink_permissions!; end
+
+  def remove_oldname_opt_records
+    oldname_opt_records.reject! do |record|
+      return false if record.resolved_path != path
+
+      record.unlink
+      record.parent.rmdir_if_possible
+      true
+    end
   end
 
+  sig { returns(Tab) }
   def tab
     Tab.for_keg(self)
   end
@@ -528,42 +543,106 @@ class Keg
     tab.aliases || []
   end
 
-  def optlink(mode = OpenStruct.new)
+  def optlink(verbose: false, dry_run: false, overwrite: false)
     opt_record.delete if opt_record.symlink? || opt_record.exist?
-    make_relative_symlink(opt_record, path, mode)
+    make_relative_symlink(opt_record, path, verbose:, dry_run:, overwrite:)
     aliases.each do |a|
       alias_opt_record = opt_record.parent/a
       alias_opt_record.delete if alias_opt_record.symlink? || alias_opt_record.exist?
-      make_relative_symlink(alias_opt_record, path, mode)
+      make_relative_symlink(alias_opt_record, path, verbose:, dry_run:, overwrite:)
     end
 
-    return unless oldname_opt_record
-
-    oldname_opt_record.delete
-    make_relative_symlink(oldname_opt_record, path, mode)
+    oldname_opt_records.each do |record|
+      record.delete
+      make_relative_symlink(record, path, verbose:, dry_run:, overwrite:)
+    end
   end
 
   def delete_pyc_files!
-    find { |pn| pn.delete if %w[.pyc .pyo].include?(pn.extname) }
-    find { |pn| FileUtils.rm_rf pn if pn.basename.to_s == "__pycache__" }
+    path.find { |pn| pn.delete if PYC_EXTENSIONS.include?(pn.extname) }
+    path.find { |pn| FileUtils.rm_rf pn if pn.basename.to_s == "__pycache__" }
   end
+
+  def normalize_pod2man_outputs!
+    # Only process uncompressed manpages, which end in a digit
+    manpages = Dir[path/"share/man/*/*.[1-9]{,p,pm}"]
+    generated_regex = /^\.\\"\s*Automatically generated by .*\n/
+    manpages.each do |f|
+      manpage = Pathname.new(f)
+      next unless manpage.file?
+
+      content = manpage.read
+      unless content.valid_encoding?
+        # Occasionally, a manpage might not be encoded as UTF-8. ISO-8859-1 is a
+        # common alternative that's worth trying in this case.
+        content = File.read(manpage, encoding: "ISO-8859-1")
+
+        # If the encoding is still invalid, we can't do anything about it.
+        next unless content.valid_encoding?
+      end
+
+      content = content.gsub(generated_regex, "")
+      content = content.lines.map do |line|
+        if line.start_with?(".TH")
+          # Split the line by spaces, but preserve quoted strings
+          parts = line.split(/\s(?=(?:[^"]|"[^"]*")*$)/)
+          next line if parts.length != 6
+
+          # pod2man embeds the perl version used into the 5th field of the footer
+          parts[4]&.gsub!(/^"perl v.*"$/, "\"\"")
+          # man extension remove in man files
+          parts[2]&.gsub!(/([1-9])(?:pm|p)?/, "\\1")
+
+          "#{parts.join(" ")}\n"
+        elsif line.start_with?(".IX")
+          # Split the line by spaces, but preserve quoted strings
+          parts = line.split(/\s(?=(?:[^"]|"[^"]*")*$)/)
+          next line if parts.length != 3
+          next line if parts[1] != "Title"
+
+          # man extension remove in man files
+          parts[2]&.gsub!(/([1-9])(?:pm|p)?/, "\\1")
+
+          "#{parts.join(" ")}\n"
+        else
+          line
+        end
+      end.join
+
+      manpage.atomic_write(content)
+    end
+  end
+
+  sig { returns(T::Array[String]) }
+  def keepme_refs
+    keepme = path/KEEPME_FILE
+    return [] if !keepme.exist? || !keepme.readable?
+
+    keepme.readlines.select { |ref| File.exist?(ref.strip) }
+  end
+
+  def binary_executable_or_library_files
+    []
+  end
+
+  def codesign_patched_binary(file); end
 
   private
 
-  def resolve_any_conflicts(dst, mode)
+  def resolve_any_conflicts(dst, dry_run: false, verbose: false, overwrite: false)
     return unless dst.symlink?
 
     src = dst.resolved_path
 
-    # src itself may be a symlink, so check lstat to ensure we are dealing with
-    # a directory, and not a symlink pointing at a directory (which needs to be
+    # `src` itself may be a symlink, so check lstat to ensure we are dealing with
+    # a directory and not a symlink pointing to a directory (which needs to be
     # treated as a file). In other words, we only want to resolve one symlink.
 
     begin
       stat = src.lstat
     rescue Errno::ENOENT
       # dst is a broken symlink, so remove it.
-      dst.unlink unless mode.dry_run
+      dst.unlink unless dry_run
       return
     end
 
@@ -572,25 +651,23 @@ class Keg
     begin
       keg = Keg.for(src)
     rescue NotAKegError
-      if Homebrew.args.verbose?
-        puts "Won't resolve conflicts for symlink #{dst} as it doesn't resolve into the Cellar"
-      end
+      puts "Won't resolve conflicts for symlink #{dst} as it doesn't resolve into the Cellar." if verbose
       return
     end
 
-    dst.unlink unless mode.dry_run
-    keg.link_dir(src, mode) { :mkpath }
+    dst.unlink unless dry_run
+    keg.link_dir(src, dry_run: false, verbose: false, overwrite: false) { :mkpath }
     true
   end
 
-  def make_relative_symlink(dst, src, mode)
+  def make_relative_symlink(dst, src, verbose: false, dry_run: false, overwrite: false)
     if dst.symlink? && src == dst.resolved_path
-      puts "Skipping; link already exists: #{dst}" if Homebrew.args.verbose?
+      puts "Skipping; link already exists: #{dst}" if verbose
       return
     end
 
     # cf. git-clean -n: list files to delete, don't really link or delete
-    if mode.dry_run && mode.overwrite
+    if dry_run && overwrite
       if dst.symlink?
         puts "#{dst} -> #{dst.resolved_path}"
       elsif dst.exist?
@@ -600,12 +677,12 @@ class Keg
     end
 
     # list all link targets
-    if mode.dry_run
+    if dry_run
       puts dst
       return
     end
 
-    dst.delete if mode.overwrite && (dst.exist? || dst.symlink?)
+    dst.delete if overwrite && (dst.exist? || dst.symlink?)
     dst.make_relative_symlink(src)
   rescue Errno::EEXIST => e
     raise ConflictError.new(self, src.relative_path_from(path), dst, e) if dst.exist?
@@ -620,10 +697,18 @@ class Keg
     raise LinkError.new(self, src.relative_path_from(path), dst, e)
   end
 
+  def remove_alias_symlink(alias_symlink, alias_match_path)
+    if alias_symlink.symlink? && alias_symlink.exist?
+      alias_symlink.delete if alias_match_path.exist? && alias_symlink.realpath == alias_match_path.realpath
+    elsif alias_symlink.symlink? || alias_symlink.exist?
+      alias_symlink.delete
+    end
+  end
+
   protected
 
   # symlinks the contents of path+relative_dir recursively into #{HOMEBREW_PREFIX}/relative_dir
-  def link_dir(relative_dir, mode)
+  def link_dir(relative_dir, verbose: false, dry_run: false, overwrite: false)
     root = path/relative_dir
     return unless root.exist?
 
@@ -639,7 +724,7 @@ class Keg
         # Don't link pyc or pyo files because Python overwrites these
         # cached object files and next time brew wants to link, the
         # file is in the way.
-        Find.prune if %w[.pyc .pyo].include?(src.extname) && src.to_s.include?("/site-packages/")
+        Find.prune if PYC_EXTENSIONS.include?(src.extname) && src.to_s.include?("/site-packages/")
 
         case yield src.relative_path_from(root)
         when :skip_file, nil
@@ -647,10 +732,10 @@ class Keg
         when :info
           next if File.basename(src) == "dir" # skip historical local 'dir' files
 
-          make_relative_symlink dst, src, mode
+          make_relative_symlink(dst, src, verbose:, dry_run:, overwrite:)
           dst.install_info
         else
-          make_relative_symlink dst, src, mode
+          make_relative_symlink dst, src, verbose:, dry_run:, overwrite:
         end
       elsif src.directory?
         # if the dst dir already exists, then great! walk the rest of the tree tho
@@ -664,10 +749,10 @@ class Keg
         when :skip_dir
           Find.prune
         when :mkpath
-          dst.mkpath unless resolve_any_conflicts(dst, mode)
+          dst.mkpath unless resolve_any_conflicts(dst, verbose:, dry_run:, overwrite:)
         else
-          unless resolve_any_conflicts(dst, mode)
-            make_relative_symlink dst, src, mode
+          unless resolve_any_conflicts(dst, verbose:, dry_run:, overwrite:)
+            make_relative_symlink(dst, src, verbose:, dry_run:, overwrite:)
             Find.prune
           end
         end

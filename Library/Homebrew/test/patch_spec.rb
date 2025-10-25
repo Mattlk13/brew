@@ -2,172 +2,104 @@
 
 require "patch"
 
-describe Patch do
+RSpec.describe Patch do
   describe "#create" do
-    context "simple patch" do
-      subject { described_class.create(:p2, nil) }
+    context "with a simple patch" do
+      subject(:patch) { described_class.create(:p2, nil) }
 
-      it { is_expected.to be_kind_of ExternalPatch }
+      it { is_expected.to be_a ExternalPatch }
       it { is_expected.to be_external }
-      its(:strip) { is_expected.to eq(:p2) }
+      it(:strip) { expect(patch.strip).to eq(:p2) }
     end
 
-    context "string patch" do
-      subject { described_class.create(:p0, "foo") }
+    context "with a string patch" do
+      subject(:patch) { described_class.create(:p0, "foo") }
 
-      it { is_expected.to be_kind_of StringPatch }
-      its(:strip) { is_expected.to eq(:p0) }
+      it { is_expected.to be_a StringPatch }
+      it(:strip) { expect(patch.strip).to eq(:p0) }
     end
 
-    context "string patch without strip" do
-      subject { described_class.create("foo", nil) }
+    context "with a string patch without strip" do
+      subject(:patch) { described_class.create("foo", nil) }
 
-      it { is_expected.to be_kind_of StringPatch }
-      its(:strip) { is_expected.to eq(:p1) }
+      it { is_expected.to be_a StringPatch }
+      it(:strip) { expect(patch.strip).to eq(:p1) }
     end
 
-    context "data patch" do
-      subject { described_class.create(:p0, :DATA) }
+    context "with a data patch" do
+      subject(:patch) { described_class.create(:p0, :DATA) }
 
-      it { is_expected.to be_kind_of DATAPatch }
-      its(:strip) { is_expected.to eq(:p0) }
+      it { is_expected.to be_a DATAPatch }
+      it(:strip) { expect(patch.strip).to eq(:p0) }
     end
 
-    context "data patch without strip" do
-      subject { described_class.create(:DATA, nil) }
+    context "with a data patch without strip" do
+      subject(:patch) { described_class.create(:DATA, nil) }
 
-      it { is_expected.to be_kind_of DATAPatch }
-      its(:strip) { is_expected.to eq(:p1) }
+      it { is_expected.to be_a DATAPatch }
+      it(:strip) { expect(patch.strip).to eq(:p1) }
     end
 
     it "raises an error for unknown values" do
-      expect {
+      expect do
         described_class.create(Object.new)
-      }.to raise_error(ArgumentError)
+      end.to raise_error(ArgumentError)
 
-      expect {
+      expect do
         described_class.create(Object.new, Object.new)
-      }.to raise_error(ArgumentError)
+      end.to raise_error(ArgumentError)
     end
   end
 
   describe "#patch_files" do
-    subject { described_class.create(:p2, nil) }
+    subject(:patch) { described_class.create(:p2, nil) }
 
-    context "empty patch" do
-      its(:resource) { is_expected.to be_kind_of Resource::PatchResource }
-      its(:patch_files) { is_expected.to eq(subject.resource.patch_files) }
-      its(:patch_files) { is_expected.to eq([]) }
+    context "when the patch is empty" do
+      it(:resource) { expect(patch.resource).to be_a Resource::Patch }
+      it { expect(patch.patch_files).to eq(patch.resource.patch_files) }
+      it { expect(patch.patch_files).to eq([]) }
     end
 
     it "returns applied patch files" do
-      subject.resource.apply("patch1.diff")
-      expect(subject.patch_files).to eq(["patch1.diff"])
+      patch.resource.apply("patch1.diff")
+      expect(patch.patch_files).to eq(["patch1.diff"])
 
-      subject.resource.apply("patch2.diff", "patch3.diff")
-      expect(subject.patch_files).to eq(["patch1.diff", "patch2.diff", "patch3.diff"])
+      patch.resource.apply("patch2.diff", "patch3.diff")
+      expect(patch.patch_files).to eq(["patch1.diff", "patch2.diff", "patch3.diff"])
 
-      subject.resource.apply(["patch4.diff", "patch5.diff"])
-      expect(subject.patch_files.count).to eq(5)
+      patch.resource.apply(["patch4.diff", "patch5.diff"])
+      expect(patch.patch_files.count).to eq(5)
 
-      subject.resource.apply("patch4.diff", ["patch5.diff", "patch6.diff"], "patch7.diff")
-      expect(subject.patch_files.count).to eq(7)
+      patch.resource.apply("patch4.diff", ["patch5.diff", "patch6.diff"], "patch7.diff")
+      expect(patch.patch_files.count).to eq(7)
     end
   end
 
-  describe "#normalize_legacy_patches" do
-    it "can create a patch from a single string" do
-      patches = described_class.normalize_legacy_patches("https://brew.sh/patch.diff")
-      expect(patches.length).to eq(1)
-      expect(patches.first.strip).to eq(:p1)
-    end
+  describe EmbeddedPatch do
+    describe "#new" do
+      subject(:patch) { described_class.new(:p1) }
 
-    it "can create patches from an array" do
-      patches = described_class.normalize_legacy_patches(
-        %w[https://brew.sh/patch1.diff https://brew.sh/patch2.diff],
-      )
-
-      expect(patches.length).to eq(2)
-      expect(patches.first.strip).to eq(:p1)
-      expect(patches.second.strip).to eq(:p1)
-    end
-
-    it "can create patches from a :p0 hash" do
-      patches = described_class.normalize_legacy_patches(
-        p0: "https://brew.sh/patch.diff",
-      )
-
-      expect(patches.length).to eq(1)
-      expect(patches.first.strip).to eq(:p0)
-    end
-
-    it "can create patches from a :p1 hash" do
-      patches = described_class.normalize_legacy_patches(
-        p1: "https://brew.sh/patch.diff",
-      )
-
-      expect(patches.length).to eq(1)
-      expect(patches.first.strip).to eq(:p1)
-    end
-
-    it "can create patches from a mixed hash" do
-      patches = described_class.normalize_legacy_patches(
-        p1: "https://brew.sh/patch1.diff",
-        p0: "https://brew.sh/patch0.diff",
-      )
-
-      expect(patches.length).to eq(2)
-      expect(patches.count { |p| p.strip == :p0 }).to eq(1)
-      expect(patches.count { |p| p.strip == :p1 }).to eq(1)
-    end
-
-    it "can create patches from a mixed hash with array" do
-      patches = described_class.normalize_legacy_patches(
-        p1: [
-          "https://brew.sh/patch10.diff",
-          "https://brew.sh/patch11.diff",
-        ],
-        p0: [
-          "https://brew.sh/patch00.diff",
-          "https://brew.sh/patch01.diff",
-        ],
-      )
-
-      expect(patches.length).to eq(4)
-      expect(patches.count { |p| p.strip == :p0 }).to eq(2)
-      expect(patches.count { |p| p.strip == :p1 }).to eq(2)
-    end
-
-    it "returns an empty array if given nil" do
-      expect(described_class.normalize_legacy_patches(nil)).to be_empty
+      it(:inspect) { expect(patch.inspect).to eq("#<EmbeddedPatch: :p1>") }
     end
   end
-end
 
-describe EmbeddedPatch do
-  describe "#new" do
-    subject { described_class.new(:p1) }
+  describe ExternalPatch do
+    subject(:patch) { described_class.new(:p1) { url "file:///my.patch" } }
 
-    its(:inspect) { is_expected.to eq("#<EmbeddedPatch: :p1>") }
-  end
-end
-
-describe ExternalPatch do
-  subject { described_class.new(:p1) { url "file:///my.patch" } }
-
-  describe "#url" do
-    its(:url) { is_expected.to eq("file:///my.patch") }
-  end
-
-  describe "#inspect" do
-    its(:inspect) { is_expected.to eq('#<ExternalPatch: :p1 "file:///my.patch">') }
-  end
-
-  describe "#cached_download" do
-    before do
-      allow(subject.resource).to receive(:cached_download).and_return("/tmp/foo.tar.gz")
+    describe "#url" do
+      it(:url) { expect(patch.url).to eq("file:///my.patch") }
     end
 
-    its(:cached_download) { is_expected.to eq("/tmp/foo.tar.gz") }
+    describe "#inspect" do
+      it(:inspect) { expect(patch.inspect).to eq('#<ExternalPatch: :p1 "file:///my.patch">') }
+    end
+
+    describe "#cached_download" do
+      before do
+        allow(patch.resource).to receive(:cached_download).and_return("/tmp/foo.tar.gz")
+      end
+
+      it(:cached_download) { expect(patch.cached_download).to eq("/tmp/foo.tar.gz") }
+    end
   end
 end

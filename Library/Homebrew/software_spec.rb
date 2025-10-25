@@ -1,6 +1,8 @@
+# typed: strict
 # frozen_string_literal: true
 
 require "resource"
+require "download_strategy"
 require "checksum"
 require "version"
 require "options"
@@ -9,46 +11,117 @@ require "dependency_collector"
 require "utils/bottles"
 require "patch"
 require "compilers"
-require "global"
-require "os/mac/version"
+require "macos_version"
+require "on_system"
 
 class SoftwareSpec
-  extend Forwardable
+  include Downloadable
 
-  PREDEFINED_OPTIONS = {
+  extend Forwardable
+  include OnSystem::MacOSAndLinux
+
+  PREDEFINED_OPTIONS = T.let({
     universal: Option.new("universal", "Build a universal binary"),
     cxx11:     Option.new("c++11",     "Build using C++11 mode"),
-  }.freeze
+  }.freeze, T::Hash[T.any(Symbol, String), Option])
 
-  attr_reader :name, :full_name, :owner
-  attr_reader :build, :resources, :patches, :options
-  attr_reader :deprecated_flags, :deprecated_options
+  sig { returns(T.nilable(String)) }
+  attr_reader :name
+
+  sig { returns(T.nilable(String)) }
+  attr_reader :full_name
+
+  sig { returns(T.nilable(T.any(Formula, Cask::Cask))) }
+  attr_reader :owner
+
+  sig { returns(BuildOptions) }
+  attr_reader :build
+
+  sig { returns(T::Hash[String, Resource]) }
+  attr_reader :resources
+
+  sig { returns(T::Array[T.any(EmbeddedPatch, ExternalPatch)]) }
+  attr_reader :patches
+
+  sig { returns(Options) }
+  attr_reader :options
+
+  sig { returns(T::Array[DeprecatedOption]) }
+  attr_reader :deprecated_flags
+
+  sig { returns(T::Array[DeprecatedOption]) }
+  attr_reader :deprecated_options
+
+  sig { returns(DependencyCollector) }
   attr_reader :dependency_collector
+
+  sig { returns(BottleSpecification) }
   attr_reader :bottle_specification
+
+  sig { returns(T::Array[CompilerFailure]) }
   attr_reader :compiler_failures
-  attr_reader :uses_from_macos_elements
 
-  def_delegators :@resource, :stage, :fetch, :verify_download_integrity, :source_modified_time
-  def_delegators :@resource, :download_name, :cached_download, :clear_cache
-  def_delegators :@resource, :checksum, :mirrors, :specs, :using
-  def_delegators :@resource, :version, :mirror, *Checksum::TYPES
-  def_delegators :@resource, :downloader
+  def_delegators :@resource, :stage, :fetch, :verify_download_integrity, :source_modified_time,
+                 :cached_download, :clear_cache, :checksum, :mirrors, :specs, :using, :version, :mirror,
+                 :downloader, :download_queue_name, :download_queue_type
 
-  def initialize
-    @resource = Resource.new
-    @resources = {}
-    @dependency_collector = DependencyCollector.new
-    @bottle_specification = BottleSpecification.new
-    @patches = []
-    @options = Options.new
-    @flags = ARGV.flags_only
-    @deprecated_flags = []
-    @deprecated_options = []
-    @build = BuildOptions.new(Options.create(@flags), options)
-    @compiler_failures = []
-    @bottle_disable_reason = nil
+  def_delegators :@resource, :sha256
+
+  sig { params(flags: T::Array[String]).void }
+  def initialize(flags: [])
+    super()
+
+    @name = T.let(nil, T.nilable(String))
+    @full_name = T.let(nil, T.nilable(String))
+    @owner = T.let(nil, T.nilable(T.any(Formula, Cask::Cask)))
+
+    # Ensure this is synced with `initialize_dup` and `freeze` (excluding simple objects like integers and booleans)
+    @resource = T.let(Resource::Formula.new, Resource::Formula)
+    @resources = T.let({}, T::Hash[String, Resource])
+    @dependency_collector = T.let(DependencyCollector.new, DependencyCollector)
+    @bottle_specification = T.let(BottleSpecification.new, BottleSpecification)
+    @patches = T.let([], T::Array[T.any(EmbeddedPatch, ExternalPatch)])
+    @options = T.let(Options.new, Options)
+    @flags = T.let(flags, T::Array[String])
+    @deprecated_flags = T.let([], T::Array[DeprecatedOption])
+    @deprecated_options = T.let([], T::Array[DeprecatedOption])
+    @build = T.let(BuildOptions.new(Options.create(@flags), options), BuildOptions)
+    @compiler_failures = T.let([], T::Array[CompilerFailure])
   end
 
+  sig { override.params(other: T.any(SoftwareSpec, Downloadable)).void }
+  def initialize_dup(other)
+    super
+    @resource = @resource.dup
+    @resources = @resources.dup
+    @dependency_collector = @dependency_collector.dup
+    @bottle_specification = @bottle_specification.dup
+    @patches = @patches.dup
+    @options = @options.dup
+    @flags = @flags.dup
+    @deprecated_flags = @deprecated_flags.dup
+    @deprecated_options = @deprecated_options.dup
+    @build = @build.dup
+    @compiler_failures = @compiler_failures.dup
+  end
+
+  sig { override.returns(T.self_type) }
+  def freeze
+    @resource.freeze
+    @resources.freeze
+    @dependency_collector.freeze
+    @bottle_specification.freeze
+    @patches.freeze
+    @options.freeze
+    @flags.freeze
+    @deprecated_flags.freeze
+    @deprecated_options.freeze
+    @build.freeze
+    @compiler_failures.freeze
+    super
+  end
+
+  sig { params(owner: T.any(Formula, Cask::Cask)).void }
   def owner=(owner)
     @name = owner.name
     @full_name = owner.full_name
@@ -57,86 +130,88 @@ class SoftwareSpec
     @resource.owner = self
     resources.each_value do |r|
       r.owner = self
-      r.version ||= begin
-        raise "#{full_name}: version missing for \"#{r.name}\" resource!" if version.nil?
+      next if r.version
+      next if version.nil?
 
-        if version.head?
-          Version.create("HEAD")
-        else
-          version.dup
-        end
-      end
+      r.version(version.head? ? Version.new("HEAD") : version.dup)
     end
     patches.each { |p| p.owner = self }
   end
 
+  sig { override.params(val: T.nilable(String), specs: T::Hash[Symbol, T.anything]).returns(T.nilable(String)) }
   def url(val = nil, specs = {})
-    return @resource.url if val.nil?
-
-    @resource.url(val, specs)
-    dependency_collector.add(@resource)
-  end
-
-  def bottle_unneeded?
-    return false unless @bottle_disable_reason
-
-    @bottle_disable_reason.unneeded?
-  end
-
-  def bottle_disabled?
-    @bottle_disable_reason ? true : false
-  end
-
-  attr_reader :bottle_disable_reason
-
-  def bottle_defined?
-    !bottle_specification.collector.keys.empty?
-  end
-
-  def bottled?
-    bottle_specification.tag?(Utils::Bottles.tag) && \
-      (bottle_specification.compatible_cellar? || ARGV.force_bottle?)
-  end
-
-  def bottle(disable_type = nil, disable_reason = nil, &block)
-    if disable_type
-      @bottle_disable_reason = BottleDisableReason.new(disable_type, disable_reason)
-    else
-      bottle_specification.instance_eval(&block)
+    if val
+      @resource.url(val, **specs)
+      dependency_collector.add(@resource)
     end
+    @resource.url
   end
 
+  sig { returns(T::Boolean) }
+  def bottle_defined?
+    !bottle_specification.collector.tags.empty?
+  end
+
+  sig { params(tag: T.nilable(T.any(Utils::Bottles::Tag, Symbol))).returns(T::Boolean) }
+  def bottle_tag?(tag = nil)
+    bottle_specification.tag?(Utils::Bottles.tag(tag))
+  end
+
+  sig { params(tag: T.nilable(T.any(Utils::Bottles::Tag, Symbol))).returns(T::Boolean) }
+  def bottled?(tag = nil)
+    return false unless bottle_tag?(tag)
+
+    return true if tag.present?
+    return true if bottle_specification.compatible_locations?
+
+    owner = self.owner
+    return false unless owner.is_a?(Formula)
+
+    owner.force_bottle
+  end
+
+  sig { params(block: T.proc.bind(BottleSpecification).void).void }
+  def bottle(&block)
+    bottle_specification.instance_eval(&block)
+  end
+
+  sig { params(name: String).returns(T::Boolean) }
   def resource_defined?(name)
     resources.key?(name)
   end
 
-  def resource(name, klass = Resource, &block)
-    if block_given?
+  sig {
+    params(name: String, klass: T.class_of(Resource), block: T.nilable(T.proc.bind(Resource).void))
+      .returns(T.nilable(Resource))
+  }
+  def resource(name = T.unsafe(nil), klass = Resource, &block)
+    if block
+      raise ArgumentError, "Resource must have a name." if name.nil?
       raise DuplicateResourceError, name if resource_defined?(name)
 
       res = klass.new(name, &block)
+      return unless res.url
+
       resources[name] = res
       dependency_collector.add(res)
+      res
     else
+      return @resource if name.nil?
+
       resources.fetch(name) { raise ResourceMissingError.new(owner, name) }
     end
   end
 
-  def go_resource(name, &block)
-    resource name, Resource::Go, &block
-  end
-
+  sig { params(name: String).returns(T::Boolean) }
   def option_defined?(name)
     options.include?(name)
   end
 
+  sig { params(name: T.any(Symbol, String), description: String).void }
   def option(name, description = "")
     opt = PREDEFINED_OPTIONS.fetch(name) do
-      unless name.is_a?(String)
-        raise ArgumentError, "option name must be string or symbol; got a #{name.class}: #{name}"
-      end
       raise ArgumentError, "option name is required" if name.empty?
-      raise ArgumentError, "option name must be longer than one character: #{name}" unless name.length > 1
+      raise ArgumentError, "option name must be longer than one character: #{name}" if name.length <= 1
       raise ArgumentError, "option name must not start with dashes: #{name}" if name.start_with?("-")
 
       Option.new(name, description)
@@ -144,6 +219,7 @@ class SoftwareSpec
     options << opt
   end
 
+  sig { params(hash: T::Hash[T.any(String, Symbol, T::Array[String]), T.any(String, Symbol, T::Array[String])]).void }
   def deprecated_option(hash)
     raise ArgumentError, "deprecated_option hash must not be empty" if hash.empty?
 
@@ -166,28 +242,52 @@ class SoftwareSpec
     @build = BuildOptions.new(Options.create(@flags), options)
   end
 
+  sig { params(spec: T.any(String, Symbol, T::Hash[T.any(String, Symbol, T::Class[Requirement]), T.untyped], T::Class[Requirement], Dependable)).void }
   def depends_on(spec)
     dep = dependency_collector.add(spec)
     add_dep_option(dep) if dep
   end
 
-  def uses_from_macos(spec)
-    depends_on(spec)
+  sig {
+    params(
+      dep:    T.any(String, T::Hash[T.any(String, Symbol), T.any(Symbol, T::Array[Symbol])]),
+      bounds: T::Hash[Symbol, Symbol],
+    ).void
+  }
+  def uses_from_macos(dep, bounds = {})
+    if dep.is_a?(Hash)
+      bounds = dep.dup
+      dep, tags = bounds.shift
+      dep = T.cast(dep, String)
+      tags = [*tags]
+      bounds = T.cast(bounds, T::Hash[Symbol, Symbol])
+    else
+      tags = []
+    end
+
+    depends_on UsesFromMacOSDependency.new(dep, tags, bounds:)
   end
 
+  sig { returns(Dependencies) }
   def deps
+    dependency_collector.deps.dup_without_system_deps
+  end
+
+  sig { returns(Dependencies) }
+  def declared_deps
     dependency_collector.deps
   end
 
+  sig { returns(T::Array[Dependable]) }
   def recursive_dependencies
     deps_f = []
-    recursive_dependencies = deps.map do |dep|
+    recursive_dependencies = deps.filter_map do |dep|
       deps_f << dep.to_formula
       dep
     rescue TapFormulaUnavailableError
       # Don't complain about missing cross-tap dependencies
       next
-    end.compact.uniq
+    end.uniq
     deps_f.compact.each do |f|
       f.recursive_dependencies.each do |dep|
         recursive_dependencies << dep unless recursive_dependencies.include?(dep)
@@ -196,36 +296,41 @@ class SoftwareSpec
     recursive_dependencies
   end
 
+  sig { returns(Requirements) }
   def requirements
     dependency_collector.requirements
   end
 
+  sig { returns(Requirements) }
   def recursive_requirements
     Requirement.expand(self)
   end
 
-  def patch(strip = :p1, src = nil, &block)
+  sig {
+    params(strip: T.any(Symbol, String), src: T.nilable(T.any(String, Symbol)),
+           block: T.nilable(T.proc.bind(Patch).void)).void
+  }
+  def patch(strip = :p1, src = T.unsafe(nil), &block)
     p = Patch.create(strip, src, &block)
+    return if p.is_a?(ExternalPatch) && p.url.blank?
+
     dependency_collector.add(p.resource) if p.is_a? ExternalPatch
     patches << p
   end
 
+  sig { params(compiler: T.any(T::Hash[Symbol, String], Symbol), block: T.nilable(T.proc.bind(CompilerFailure).void)).void }
   def fails_with(compiler, &block)
     compiler_failures << CompilerFailure.create(compiler, &block)
   end
 
+  sig { params(standards: T::Array[String]).void }
   def needs(*standards)
     standards.each do |standard|
       compiler_failures.concat CompilerFailure.for_standard(standard)
     end
   end
 
-  def add_legacy_patches(list)
-    list = Patch.normalize_legacy_patches(list)
-    list.each { |p| p.owner = self }
-    patches.concat(list)
-  end
-
+  sig { params(dep: Dependable).void }
   def add_dep_option(dep)
     dep.option_names.each do |name|
       if dep.optional? && !option_defined?("with-#{name}")
@@ -236,179 +341,3 @@ class SoftwareSpec
     end
   end
 end
-
-class HeadSoftwareSpec < SoftwareSpec
-  def initialize
-    super
-    @resource.version = Version.create("HEAD")
-  end
-
-  def verify_download_integrity(_fn)
-    nil
-  end
-end
-
-class Bottle
-  class Filename
-    attr_reader :name, :version, :tag, :rebuild
-
-    def self.create(formula, tag, rebuild)
-      new(formula.name, formula.pkg_version, tag, rebuild)
-    end
-
-    def initialize(name, version, tag, rebuild)
-      @name = File.basename name
-      @version = version
-      @tag = tag.to_s
-      @rebuild = rebuild
-    end
-
-    def to_s
-      "#{name}--#{version}#{extname}"
-    end
-    alias to_str to_s
-
-    def json
-      "#{name}--#{version}.#{tag}.bottle.json"
-    end
-
-    def bintray
-      "#{name}-#{version}#{extname}"
-    end
-
-    def extname
-      s = rebuild.positive? ? ".#{rebuild}" : ""
-      ".#{tag}.bottle#{s}.tar.gz"
-    end
-  end
-
-  extend Forwardable
-
-  attr_reader :name, :resource, :prefix, :cellar, :rebuild
-
-  def_delegators :resource, :url, :fetch, :verify_download_integrity
-  def_delegators :resource, :cached_download, :clear_cache
-
-  def initialize(formula, spec)
-    @name = formula.name
-    @resource = Resource.new
-    @resource.owner = formula
-    @resource.specs[:bottle] = true
-    @spec = spec
-
-    checksum, tag = spec.checksum_for(Utils::Bottles.tag)
-
-    filename = Filename.create(formula, tag, spec.rebuild)
-    @resource.url("#{spec.root_url}/#{filename.bintray}",
-                  select_download_strategy(spec.root_url_specs))
-    @resource.version = formula.pkg_version
-    @resource.checksum = checksum
-    @prefix = spec.prefix
-    @cellar = spec.cellar
-    @rebuild = spec.rebuild
-  end
-
-  def compatible_cellar?
-    @spec.compatible_cellar?
-  end
-
-  # Does the bottle need to be relocated?
-  def skip_relocation?
-    @spec.skip_relocation?
-  end
-
-  def stage
-    resource.downloader.stage
-  end
-
-  private
-
-  def select_download_strategy(specs)
-    specs[:using] ||= DownloadStrategyDetector.detect(@spec.root_url)
-    specs
-  end
-end
-
-class BottleSpecification
-  DEFAULT_PREFIX = Homebrew::DEFAULT_PREFIX
-
-  attr_rw :prefix, :cellar, :rebuild
-  attr_accessor :tap
-  attr_reader :checksum, :collector, :root_url_specs
-
-  def initialize
-    @rebuild = 0
-    @prefix = Homebrew::DEFAULT_PREFIX
-    @cellar = Homebrew::DEFAULT_CELLAR
-    @collector = Utils::Bottles::Collector.new
-    @root_url_specs = {}
-  end
-
-  def root_url(var = nil, specs = {})
-    if var.nil?
-      @root_url ||= "#{HOMEBREW_BOTTLE_DOMAIN}/#{Utils::Bottles::Bintray.repository(tap)}"
-    else
-      @root_url = var
-      @root_url_specs.merge!(specs)
-    end
-  end
-
-  def compatible_cellar?
-    cellar == :any || cellar == :any_skip_relocation || cellar == HOMEBREW_CELLAR.to_s
-  end
-
-  # Does the {Bottle} this BottleSpecification belongs to need to be relocated?
-  def skip_relocation?
-    cellar == :any_skip_relocation
-  end
-
-  def tag?(tag)
-    checksum_for(tag) ? true : false
-  end
-
-  # Checksum methods in the DSL's bottle block optionally take
-  # a Hash, which indicates the platform the checksum applies on.
-  Checksum::TYPES.each do |cksum|
-    define_method(cksum) do |val|
-      digest, tag = val.shift
-      collector[tag] = Checksum.new(cksum, digest)
-    end
-  end
-
-  def checksum_for(tag)
-    collector.fetch_checksum_for(tag)
-  end
-
-  def checksums
-    tags = collector.keys.sort_by do |tag|
-      # Sort non-MacOS tags below MacOS tags.
-
-      OS::Mac::Version.from_symbol tag
-    rescue ArgumentError
-      "0.#{tag}"
-    end
-    checksums = {}
-    tags.reverse_each do |tag|
-      checksum = collector[tag]
-      checksums[checksum.hash_type] ||= []
-      checksums[checksum.hash_type] << { checksum => tag }
-    end
-    checksums
-  end
-end
-
-class PourBottleCheck
-  def initialize(formula)
-    @formula = formula
-  end
-
-  def reason(reason)
-    @formula.pour_bottle_check_unsatisfied_reason = reason
-  end
-
-  def satisfy(&block)
-    @formula.send(:define_method, :pour_bottle?, &block)
-  end
-end
-
-require "extend/os/software_spec"

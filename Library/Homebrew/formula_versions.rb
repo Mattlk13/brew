@@ -1,130 +1,88 @@
+# typed: true # rubocop:todo Sorbet/StrictSigil
 # frozen_string_literal: true
 
 require "formula"
+require "utils/output"
 
+# Helper class for traversing a formula's previous versions.
+#
+# @api internal
 class FormulaVersions
+  include Context
+  include Utils::Output::Mixin
+
   IGNORED_EXCEPTIONS = [
     ArgumentError, NameError, SyntaxError, TypeError,
     FormulaSpecificationError, FormulaValidationError,
     ErrorDuringExecution, LoadError, MethodDeprecatedError
   ].freeze
 
-  MAX_VERSIONS_DEPTH = 2
-
-  attr_reader :name, :path, :repository, :entry_name
-
+  sig { params(formula: Formula).void }
   def initialize(formula)
     @name = formula.name
-    @path = formula.path
-    @repository = formula.tap.path
-    @entry_name = @path.relative_path_from(repository).to_s
-    @current_formula = formula
+    @path = formula.tap_path
+    @repository = T.must(formula.tap).path
+    @relative_path = @path.relative_path_from(repository).to_s
+    # Also look at e.g. older homebrew-core paths before sharding.
+    if (match = @relative_path.match(%r{^(HomebrewFormula|Formula)/([a-z]|lib)/(.+)}))
+      @old_relative_path = "#{match[1]}/#{match[3]}"
+    end
     @formula_at_revision = {}
   end
 
   def rev_list(branch)
     repository.cd do
-      Utils.popen_read("git", "rev-list", "--abbrev-commit", "--remove-empty", branch, "--", entry_name) do |io|
-        yield io.readline.chomp until io.eof?
+      rev_list_cmd = ["git", "rev-list", "--abbrev-commit", "--remove-empty"]
+      [relative_path, old_relative_path].compact.each do |entry|
+        Utils.popen_read(*rev_list_cmd, branch, "--", entry) do |io|
+          yield [io.readline.chomp, entry] until io.eof?
+        end
       end
     end
   end
 
-  def file_contents_at_revision(rev)
-    repository.cd { Utils.popen_read("git", "cat-file", "blob", "#{rev}:#{entry_name}") }
-  end
-
-  def formula_at_revision(rev)
+  sig {
+    type_parameters(:U)
+      .params(
+        revision:              String,
+        formula_relative_path: String,
+        _block:                T.proc.params(arg0: Formula).returns(T.type_parameter(:U)),
+      ).returns(T.nilable(T.type_parameter(:U)))
+  }
+  def formula_at_revision(revision, formula_relative_path = relative_path, &_block)
     Homebrew.raise_deprecation_exceptions = true
 
-    yield @formula_at_revision[rev] ||= begin
-      contents = file_contents_at_revision(rev)
-      nostdout { Formulary.from_contents(name, path, contents) }
+    yield @formula_at_revision[revision] ||= begin
+      contents = file_contents_at_revision(revision, formula_relative_path)
+      nostdout { Formulary.from_contents(name, path, contents, ignore_errors: true) }
     end
   rescue *IGNORED_EXCEPTIONS => e
+    require "utils/backtrace"
+
     # We rescue these so that we can skip bad versions and
     # continue walking the history
-    odebug "#{e} in #{name} at revision #{rev}", e.backtrace if ARGV.debug?
+    odebug "#{e} in #{name} at revision #{revision}", Utils::Backtrace.clean(e)
+    nil
   rescue FormulaUnavailableError
     nil
   ensure
     Homebrew.raise_deprecation_exceptions = false
   end
 
-  def bottle_version_map(branch)
-    map = Hash.new { |h, k| h[k] = [] }
-
-    versions_seen = 0
-    rev_list(branch) do |rev|
-      formula_at_revision(rev) do |f|
-        bottle = f.bottle_specification
-        map[f.pkg_version] << bottle.rebuild unless bottle.checksums.empty?
-        versions_seen = (map.keys + [f.pkg_version]).uniq.length
-      end
-      return map if versions_seen > MAX_VERSIONS_DEPTH
-    end
-    map
-  end
-
-  def previous_version_and_checksum(branch)
-    map = {}
-
-    rev_list(branch) do |rev|
-      formula_at_revision(rev) do |f|
-        [:stable, :devel].each do |spec_sym|
-          next unless spec = f.send(spec_sym)
-
-          map[spec_sym] ||= { version: spec.version, checksum: spec.checksum }
-        end
-      end
-
-      break if map[:stable] || map[:devel]
-    end
-
-    map[:stable] ||= {}
-    map[:devel] ||= {}
-
-    map
-  end
-
-  def version_attributes_map(attributes, branch)
-    attributes_map = {}
-    return attributes_map if attributes.empty?
-
-    attributes.each do |attribute|
-      attributes_map[attribute] ||= {
-        stable: {},
-        devel:  {},
-      }
-    end
-
-    stable_versions_seen = 0
-    rev_list(branch) do |rev|
-      formula_at_revision(rev) do |f|
-        attributes.each do |attribute|
-          map = attributes_map[attribute]
-          set_attribute_map(map, f, attribute)
-
-          stable_keys_length = (map[:stable].keys + [f.version]).uniq.length
-          stable_versions_seen = [stable_versions_seen, stable_keys_length].max
-        end
-      end
-      break if stable_versions_seen > MAX_VERSIONS_DEPTH
-    end
-
-    attributes_map
-  end
-
   private
 
-  def set_attribute_map(map, f, attribute)
-    if f.stable
-      map[:stable][f.stable.version] ||= []
-      map[:stable][f.stable.version] << f.send(attribute)
-    end
-    return unless f.devel
+  attr_reader :name, :path, :repository, :relative_path, :old_relative_path
 
-    map[:devel][f.devel.version] ||= []
-    map[:devel][f.devel.version] << f.send(attribute)
+  sig { params(revision: String, relative_path: String).returns(String) }
+  def file_contents_at_revision(revision, relative_path)
+    repository.cd { Utils.popen_read("git", "cat-file", "blob", "#{revision}:#{relative_path}") }
+  end
+
+  def nostdout(&block)
+    if verbose?
+      yield
+    else
+      redirect_stdout(File::NULL, &block)
+    end
   end
 end

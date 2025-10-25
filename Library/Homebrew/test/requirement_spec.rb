@@ -3,38 +3,45 @@
 require "extend/ENV"
 require "requirement"
 
-describe Requirement do
+RSpec.describe Requirement do
   alias_matcher :be_a_build_requirement, :be_a_build
 
-  subject { klass.new }
+  subject(:requirement) { klass.new }
 
   let(:klass) { Class.new(described_class) }
 
-  describe "#tags" do
-    subject { described_class.new(tags) }
+  describe "base class" do
+    it "raises an error when instantiated" do
+      expect { described_class.new }
+        .to raise_error(RuntimeError, "Requirement is declared as abstract; it cannot be instantiated")
+    end
+  end
 
-    context "single tag" do
+  describe "#tags" do
+    subject(:req) { klass.new(tags) }
+
+    context "with a single tag" do
       let(:tags) { ["bar"] }
 
-      its(:tags) { are_expected.to eq(tags) }
+      it(:tags) { expect(req.tags).to eq(tags) }
     end
 
-    context "multiple tags" do
+    context "with multiple tags" do
       let(:tags) { ["bar", "baz"] }
 
-      its(:tags) { are_expected.to eq(tags) }
+      it(:tags) { expect(req.tags).to eq(tags) }
     end
 
-    context "symbol tags" do
+    context "with symbol tags" do
       let(:tags) { [:build] }
 
-      its(:tags) { are_expected.to eq(tags) }
+      it(:tags) { expect(req.tags).to eq(tags) }
     end
 
-    context "symbol and string tags" do
+    context "with symbol and string tags" do
       let(:tags) { [:build, "bar"] }
 
-      its(:tags) { are_expected.to eq(tags) }
+      it(:tags) { expect(req.tags).to eq(tags) }
     end
   end
 
@@ -110,7 +117,7 @@ describe Requirement do
 
       it "sets up build environment" do
         expect(ENV).to receive(:with_build_environment).and_call_original
-        subject.satisfied?
+        requirement.satisfied?
       end
     end
 
@@ -125,7 +132,7 @@ describe Requirement do
 
       it "skips setting up build environment" do
         expect(ENV).not_to receive(:with_build_environment)
-        subject.satisfied?
+        requirement.satisfied?
       end
     end
 
@@ -139,16 +146,18 @@ describe Requirement do
       end
 
       it "infers path from #satisfy result" do
-        expect(ENV).to receive(:prepend_path).with("PATH", Pathname.new("/foo/bar"))
-        subject.satisfied?
-        subject.modify_build_environment
+        without_partial_double_verification do
+          expect(ENV).to receive(:prepend_path).with("PATH", Pathname.new("/foo/bar"))
+        end
+        requirement.satisfied?
+        requirement.modify_build_environment
       end
     end
   end
 
   describe "#build?" do
-    context ":build tag is specified" do
-      subject { described_class.new([:build]) }
+    context "when the :build tag is specified" do
+      subject { klass.new([:build]) }
 
       it { is_expected.to be_a_build_requirement }
     end
@@ -163,15 +172,11 @@ describe Requirement do
     let(:klass) { self.class.const_get(const) }
 
     before do
-      self.class.const_set(const, Class.new(described_class))
+      stub_const const.to_s, Class.new(described_class)
     end
 
-    after do
-      self.class.send(:remove_const, const)
-    end
-
-    its(:name) { is_expected.to eq("foo") }
-    its(:option_names) { are_expected.to eq(["foo"]) }
+    it(:name) { expect(requirement.name).to eq("foo") }
+    it(:option_names) { expect(requirement.option_names).to eq(["foo"]) }
   end
 
   describe "#modify_build_environment" do
@@ -179,53 +184,53 @@ describe Requirement do
       let(:klass) { Class.new(described_class) }
 
       it "returns nil" do
-        expect(subject.modify_build_environment).to be nil
+        expect { requirement.modify_build_environment }.not_to raise_error
       end
     end
   end
 
   describe "#eql? and #==" do
-    subject { described_class.new }
+    subject(:requirement) { klass.new }
 
     it "returns true if the names and tags are equal" do
-      other = described_class.new
+      other = klass.new
 
-      expect(subject).to eql(other)
-      expect(subject).to eq(other)
+      expect(requirement).to eql(other)
+      expect(requirement).to eq(other)
     end
 
     it "returns false if names differ" do
-      other = described_class.new
+      other = klass.new
       allow(other).to receive(:name).and_return("foo")
-      expect(subject).not_to eql(other)
-      expect(subject).not_to eq(other)
+      expect(requirement).not_to eql(other)
+      expect(requirement).not_to eq(other)
     end
 
     it "returns false if tags differ" do
-      other = described_class.new([:optional])
+      other = klass.new([:optional])
 
-      expect(subject).not_to eql(other)
-      expect(subject).not_to eq(other)
+      expect(requirement).not_to eql(other)
+      expect(requirement).not_to eq(other)
     end
   end
 
   describe "#hash" do
-    subject { described_class.new }
+    subject(:requirement) { klass.new }
 
     it "is equal if names and tags are equal" do
-      other = described_class.new
-      expect(subject.hash).to eq(other.hash)
+      other = klass.new
+      expect(requirement.hash).to eq(other.hash)
     end
 
     it "differs if names differ" do
-      other = described_class.new
+      other = klass.new
       allow(other).to receive(:name).and_return("foo")
-      expect(subject.hash).not_to eq(other.hash)
+      expect(requirement.hash).not_to eq(other.hash)
     end
 
     it "differs if tags differ" do
-      other = described_class.new([:optional])
-      expect(subject.hash).not_to eq(other.hash)
+      other = klass.new([:optional])
+      expect(requirement.hash).not_to eq(other.hash)
     end
   end
 end

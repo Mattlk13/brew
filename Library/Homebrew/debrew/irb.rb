@@ -1,36 +1,24 @@
+# typed: strict
 # frozen_string_literal: true
 
 require "irb"
 
 module IRB
-  @setup_done = false
+  sig { params(binding: Binding).void }
+  def self.start_within(binding)
+    old_stdout_sync = $stdout.sync
+    $stdout.sync = true
 
-  extend Module.new {
-    def parse_opts; end
-
-    def start_within(binding)
-      unless @setup_done
-        setup(nil)
-        @setup_done = true
-      end
-
-      workspace = WorkSpace.new(binding)
-      irb = Irb.new(workspace)
-
-      @CONF[:IRB_RC]&.call(irb.context)
-      @CONF[:MAIN_CONTEXT] = irb.context
-
-      trap("SIGINT") do
-        irb.signal_handle
-      end
-
-      begin
-        catch(:IRB_EXIT) do
-          irb.eval_input
-        end
-      ensure
-        irb_at_exit
-      end
+    @setup_done ||= T.let(false, T.nilable(T::Boolean))
+    unless @setup_done
+      setup(nil, argv: [])
+      @setup_done = true
     end
-  }
+
+    workspace = WorkSpace.new(binding)
+    irb = Irb.new(workspace)
+    irb.run(conf)
+  ensure
+    $stdout.sync = old_stdout_sync
+  end
 end

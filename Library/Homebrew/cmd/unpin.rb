@@ -1,36 +1,32 @@
+# typed: strict
 # frozen_string_literal: true
 
+require "abstract_command"
 require "formula"
-require "cli/parser"
 
 module Homebrew
-  module_function
+  module Cmd
+    class Unpin < AbstractCommand
+      cmd_args do
+        description <<~EOS
+          Unpin <formula>, allowing them to be upgraded by `brew upgrade` <formula>.
+          See also `pin`.
+        EOS
 
-  def unpin_args
-    Homebrew::CLI::Parser.new do
-      usage_banner <<~EOS
-        `unpin` <formula>
+        named_args :installed_formula, min: 1
+      end
 
-        Unpin <formula>, allowing them to be upgraded by `brew upgrade` <formula>.
-        See also `pin`.
-      EOS
-      switch :verbose
-      switch :debug
-    end
-  end
-
-  def unpin
-    unpin_args.parse
-
-    raise FormulaUnspecifiedError if args.no_named?
-
-    args.resolved_formulae.each do |f|
-      if f.pinned?
-        f.unpin
-      elsif !f.pinnable?
-        onoe "#{f.name} not installed"
-      else
-        opoo "#{f.name} not pinned"
+      sig { override.void }
+      def run
+        args.named.to_resolved_formulae.each do |f|
+          if f.pinned?
+            f.unpin
+          elsif !f.pinnable?
+            onoe "#{f.name} not installed"
+          else
+            opoo "#{f.name} not pinned"
+          end
+        end
       end
     end
   end

@@ -1,33 +1,34 @@
+# typed: strict
 # frozen_string_literal: true
 
+require "abstract_command"
 require "sandbox"
 require "formula_installer"
-require "cli/parser"
 
 module Homebrew
-  module_function
+  module Cmd
+    class Postinstall < AbstractCommand
+      cmd_args do
+        description <<~EOS
+          Rerun the post-install steps for <formula>.
+        EOS
 
-  def postinstall_args
-    Homebrew::CLI::Parser.new do
-      usage_banner <<~EOS
-        `postinstall` <formula>
+        named_args :installed_formula, min: 1
+      end
 
-        Rerun the post-install steps for <formula>.
-      EOS
-      switch :force
-      switch :verbose
-      switch :debug
-      min_named :keg
-    end
-  end
-
-  def postinstall
-    postinstall_args.parse
-
-    args.resolved_formulae.each do |f|
-      ohai "Postinstalling #{f}"
-      fi = FormulaInstaller.new(f)
-      fi.post_install
+      sig { override.void }
+      def run
+        args.named.to_resolved_formulae.each do |f|
+          ohai "Postinstalling #{f}"
+          f.install_etc_var
+          if f.post_install_defined?
+            fi = FormulaInstaller.new(f, **{ debug: args.debug?, quiet: args.quiet?, verbose: args.verbose? }.compact)
+            fi.post_install
+          else
+            opoo "#{f}: no `post_install` method was defined in the formula!"
+          end
+        end
+      end
     end
   end
 end
