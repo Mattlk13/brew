@@ -127,7 +127,7 @@ If there's no Homebrew Portable Ruby available for your processor:
   fi
 
   # Needed for `brew` and `odie`.
-  source "${HOMEBREW_LIBRARY}/Homebrew/utils/helpers.sh"
+  source "${HOMEBREW_LIBRARY}/Homebrew/utils.sh"
 
   if [[ -x "${vendor_ruby_path}" ]]
   then

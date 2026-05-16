@@ -3,11 +3,22 @@
 
 require "cmd/shared_examples/args_parse"
 require "cmd/which-formula"
+require "open3"
+require "shellwords"
 
 RSpec.describe Homebrew::Cmd::WhichFormula do
   it_behaves_like "parseable arguments"
 
   describe "which_formula" do
+    let(:brew_sh_env) { { "HOMEBREW_COLOR" => nil, "HOMEBREW_NO_EMOJI" => nil } }
+    let(:shell_cellar) do
+      if (HOMEBREW_LIBRARY_PATH.parent.parent/"Cellar").directory?
+        HOMEBREW_LIBRARY_PATH.parent.parent/"Cellar"
+      else
+        HOMEBREW_CELLAR
+      end
+    end
+
     before do
       # Override DATABASE_FILE to use test environment's HOMEBREW_CACHE
       test_db_file = HOMEBREW_CACHE/"api"/described_class::ENDPOINT
@@ -22,14 +33,67 @@ RSpec.describe Homebrew::Cmd::WhichFormula do
         qux(4.5.6):QUX
         quux:quux
       EOS
+
+      (shell_cellar/"foo/1.0.0").mkpath
     end
 
-    it "prints the formula name for a given binary", :integration_test do
-      expect { brew_sh "which-formula", "--skip-update", "foo2" }.to output("foo\n").to_stdout
-      expect { brew_sh "which-formula", "--skip-update", "baz" }.to output("baz\n").to_stdout
+    after do
+      FileUtils.rm_rf shell_cellar/"foo"
+    end
+
+    it "prints plain formula names when outputting to a non-TTY", :integration_test do
+      expect { brew_sh "which-formula", "--skip-update", "foo2", brew_sh_env }.to output("foo\n").to_stdout
+      expect do
+        brew_sh "which-formula", "--skip-update", "foo2", brew_sh_env.merge("HOMEBREW_NO_EMOJI" => "1")
+      end.to output("foo\n").to_stdout
+      expect { brew_sh "which-formula", "--skip-update", "baz", brew_sh_env }.to output("baz\n").to_stdout
       expect { brew_sh "which-formula", "--skip-update", "bar" }.not_to output.to_stdout
-      expect { brew_sh "which-formula", "--skip-update", "QUX" }.to output("qux\n").to_stdout
-      expect { brew_sh "which-formula", "--skip-update", "quux" }.to output("quux\n").to_stdout
+      expect { brew_sh "which-formula", "--skip-update", "QUX", brew_sh_env }.to output("qux\n").to_stdout
+      expect { brew_sh "which-formula", "--skip-update", "quux", brew_sh_env }.to output("quux\n").to_stdout
+    end
+
+    it "announces executable database downloads" do
+      mktmpdir do |path|
+        database = path/"api/internal/executables.txt"
+        repository = path/"repository"
+        fake_curl = path/"curl"
+        fake_curl.write <<~SH
+          #!/bin/sh
+          while [ "$#" -gt 0 ]; do
+            if [ "$1" = "--output" ]; then
+              output="$2"
+              shift 2
+            else
+              shift
+            fi
+          done
+          mkdir -p "$(dirname "$output")"
+          printf 'downloaded-formula(1.0):downloaded\\n' > "$output"
+        SH
+        fake_curl.chmod 0755
+        (repository/".git").mkpath
+
+        stdout, stderr, status = Open3.capture3(
+          {
+            "HOMEBREW_API_DEFAULT_DOMAIN" => "https://example.com",
+            "HOMEBREW_CACHE"              => path.to_s,
+            "HOMEBREW_COLOR"              => nil,
+            "HOMEBREW_CURL"               => fake_curl.to_s,
+            "HOMEBREW_CURL_SPEED_LIMIT"   => "100",
+            "HOMEBREW_CURL_SPEED_TIME"    => "1",
+            "HOMEBREW_LIBRARY"            => HOMEBREW_LIBRARY_PATH.parent.to_s,
+            "HOMEBREW_REPOSITORY"         => repository.to_s,
+            "HOMEBREW_USER_AGENT_CURL"    => "Homebrew tests",
+          },
+          "/bin/bash",
+          "-c",
+          "source #{Shellwords.escape((HOMEBREW_LIBRARY_PATH/"cmd/which-formula.sh").to_s)}; " \
+          "download_and_cache_executables_file",
+        )
+
+        expect([status.success?, stdout, stderr, database.read])
+          .to eq([true, "==> Downloading executables.txt\n", "", "downloaded-formula(1.0):downloaded\n"])
+      end
     end
   end
 end

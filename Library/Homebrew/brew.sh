@@ -229,7 +229,7 @@ esac
 ##### Next, define all other helper functions.
 #####
 
-source "${HOMEBREW_LIBRARY}/Homebrew/utils/helpers.sh"
+source "${HOMEBREW_LIBRARY}/Homebrew/utils.sh"
 
 check-run-command-as-root() {
   [[ "${EUID}" == 0 || "${UID}" == 0 ]] || return

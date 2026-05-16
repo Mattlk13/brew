@@ -17,7 +17,7 @@ homebrew-list() {
   then
     tty=1
     ls_args+=("-Cq")
-    source "${HOMEBREW_LIBRARY}/Homebrew/utils/helpers.sh"
+    source "${HOMEBREW_LIBRARY}/Homebrew/utils.sh"
     ls_env+=("COLUMNS=$(columns)")
   fi
 

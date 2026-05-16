@@ -18,6 +18,7 @@ module Formatter
   # Format a string as headline.
   #
   # @api internal
+  # Keep in sync with `headline` in Library/Homebrew/utils/formatter.sh.
   sig { params(string: String, color: T.nilable(Symbol)).returns(String) }
   def self.headline(string, color: nil)
     arrow("#{Tty.bold}#{string}#{Tty.reset}", color:)
@@ -28,6 +29,7 @@ module Formatter
     "#{Tty.green}#{string}#{Tty.default}"
   end
 
+  # Keep in sync with `bold` in Library/Homebrew/utils/formatter.sh.
   sig { params(string: String).returns(String) }
   def self.bold(string)
     "#{Tty.bold}#{string}#{Tty.reset}"

@@ -1,7 +1,7 @@
 # Documentation defined in Library/Homebrew/cmd/exec.rb
 
 # shellcheck disable=SC2154
-source "${HOMEBREW_LIBRARY}/Homebrew/cmd/which-formula.sh"
+source "${HOMEBREW_LIBRARY}/Homebrew/utils/executables.sh"
 
 exec-formula-name() {
   local formula="$1"
@@ -151,35 +151,20 @@ homebrew-exec() {
     download_and_cache_executables_file >&2
 
     local -a matching_formulae=()
-    local cmds_text line selected_formula formula
+    local selected_formula formula
     selected_formula=""
     # Some executables are provided by multiple formulae. Prefer an already
     # installed provider to avoid unnecessary installs; otherwise use the first
     # provider listed by the database.
-    while read -r line
+    while read -r formula
     do
-      [[ "${line}" == *:* ]] || continue
+      matching_formulae+=("${formula}")
 
-      # `executables.txt` lines are `formula(version):exe exe...`. Use Bash's
-      # prefix/suffix removal instead of splitting with `IFS`, so executable
-      # lists are kept as one string for whole-word matching below.
-      formula="${line%%:*}"
-      cmds_text="${line#*:}"
-      [[ -z "${formula}" ]] && continue
-      [[ -z "${cmds_text}" ]] && continue
-
-      # Padding both sides with spaces avoids matching `foo` inside `foobar`.
-      if [[ " ${cmds_text} " == *" ${executable} "* ]]
+      if [[ -z "${selected_formula}" ]] && exec-formula-installed "${formula}"
       then
-        formula="${formula%\(*}"
-        matching_formulae+=("${formula}")
-
-        if [[ -z "${selected_formula}" ]] && exec-formula-installed "${formula}"
-        then
-          selected_formula="${formula}"
-        fi
+        selected_formula="${formula}"
       fi
-    done <"${DATABASE_FILE}" 2>/dev/null
+    done < <(formulae_containing_executable "${executable}")
 
     [[ "${#matching_formulae[@]}" -gt 0 ]] || odie "No Homebrew formula found for \`${executable}\`."
 

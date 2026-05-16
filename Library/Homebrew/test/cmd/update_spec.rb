@@ -26,11 +26,19 @@ RSpec.describe Homebrew::Cmd::Update do
     end
   end
 
+  def setup_update_utils
+    (test_root/"Library/Homebrew/utils").mkpath
+    FileUtils.ln_s repository_root/"Library/Homebrew/utils.sh", test_root/"Library/Homebrew/utils.sh"
+    %w[api executables formatter lock tty].each do |name|
+      FileUtils.ln_s repository_root/"Library/Homebrew/utils/#{name}.sh",
+                     test_root/"Library/Homebrew/utils/#{name}.sh"
+    end
+  end
+
   it "passes all arguments through to delegated upgrades" do
     args_file = test_root/"brew-args.txt"
     brew_wrapper = test_root/"brew-wrapper"
-    (test_root/"Library/Homebrew/utils").mkpath
-    FileUtils.ln_s repository_root/"Library/Homebrew/utils/lock.sh", test_root/"Library/Homebrew/utils/lock.sh"
+    setup_update_utils
     brew_wrapper.write <<~SH
       #!/bin/bash
       printf '%s\n' "$@" > "#{args_file}"
@@ -58,8 +66,7 @@ RSpec.describe Homebrew::Cmd::Update do
 
   it "passes `--auto-update` through to `update-report`" do
     args_file = test_root/"brew-args.txt"
-    (test_root/"Library/Homebrew/utils").mkpath
-    FileUtils.ln_s repository_root/"Library/Homebrew/utils/lock.sh", test_root/"Library/Homebrew/utils/lock.sh"
+    setup_update_utils
     (test_root/"cache").mkpath
     (test_root/"repository").mkpath
 
@@ -98,11 +105,55 @@ RSpec.describe Homebrew::Cmd::Update do
     expect(args_file.read).to eq("update-report\n--auto-update\n")
   end
 
+  it "announces executables.txt downloads" do
+    fetched_file = test_root/"fetched-file.txt"
+    setup_update_utils
+    (test_root/"cache").mkpath
+    (test_root/"cache/all_commands_list.txt").write("")
+    (test_root/"repository").mkpath
+
+    stdout, stderr, status = run_update_shell(
+      <<~SH,
+        source "#{repository_root}/Library/Homebrew/utils.sh"
+        source "#{update_script}"
+        brew() { :; }
+        fetch_api_file() { printf '%s\\n' "$1" > "#{fetched_file}"; }
+        git() {
+          [[ "$1" == "--version" ]] && return 0
+          return 1
+        }
+        git_init_if_necessary() { :; }
+        lock() { :; }
+        setup_ca_certificates() { :; }
+        setup_curl() { :; }
+        setup_git() { :; }
+        homebrew-update
+      SH
+      {
+        "HOMEBREW_CACHE"                   => (test_root/"cache").to_s,
+        "HOMEBREW_CELLAR"                  => (test_root/"cellar").to_s,
+        "HOMEBREW_DEVELOPER"               => nil,
+        "HOMEBREW_FETCH_EXECUTABLES_TXT"   => "1",
+        "HOMEBREW_LIBRARY"                 => (test_root/"Library").to_s,
+        "HOMEBREW_BREW_DEFAULT_GIT_REMOTE" => "https://example.com/Homebrew/brew",
+        "HOMEBREW_BREW_GIT_REMOTE"         => "https://example.com/Homebrew/brew",
+        "HOMEBREW_NO_INSTALL_FROM_API"     => "1",
+        "HOMEBREW_PREFIX"                  => (test_root/"prefix").to_s,
+        "HOMEBREW_QUIET"                   => "1",
+        "HOMEBREW_REPOSITORY"              => (test_root/"repository").to_s,
+      },
+    )
+
+    expect(status.success?).to be true
+    expect(stdout).to eq("==> Downloading executables.txt\n")
+    expect(stderr).to be_empty
+    expect(fetched_file.read).to eq("internal/executables.txt\n")
+  end
+
   it "preserves `update-report` arguments and exit status with the Rust frontend enabled" do
     args_file = test_root/"brew-args.txt"
     brew_wrapper = test_root/"brew-wrapper"
-    (test_root/"Library/Homebrew/utils").mkpath
-    FileUtils.ln_s repository_root/"Library/Homebrew/utils/lock.sh", test_root/"Library/Homebrew/utils/lock.sh"
+    setup_update_utils
     (test_root/"cache").mkpath
     (test_root/"repository").mkpath
     brew_wrapper.write <<~SH
@@ -114,7 +165,7 @@ RSpec.describe Homebrew::Cmd::Update do
 
     _stdout, stderr, status = run_update_shell(
       <<~SH,
-        source "#{repository_root}/Library/Homebrew/utils/helpers.sh"
+        source "#{repository_root}/Library/Homebrew/utils.sh"
         source "#{update_script}"
         fetch_api_file() { :; }
         git() {
