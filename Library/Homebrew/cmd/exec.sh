@@ -84,10 +84,6 @@ homebrew-exec() {
   while [[ "$#" -gt 0 ]]
   do
     case "$1" in
-      --skip-update)
-        HOMEBREW_SKIP_UPDATE=1
-        shift
-        ;;
       --formulae=*)
         formulae_arg="${1#--formulae=}"
         formulae_seen=1
@@ -148,7 +144,7 @@ homebrew-exec() {
     [[ "${executable}" != */* ]] || odie "Executable name must not contain path separators without \`--formulae\`."
 
     provider_lookup=1
-    download_and_cache_executables_file >&2
+    ensure_executables_file >&2
 
     local -a matching_formulae=()
     local selected_formula formula

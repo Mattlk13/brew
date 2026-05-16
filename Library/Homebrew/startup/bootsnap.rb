@@ -40,7 +40,11 @@ module Homebrew
     def self.load!(compile_cache: true)
       return unless enabled?
 
-      require ENV.fetch("HOMEBREW_BOOTSNAP_GEM_PATH")
+      begin
+        require ENV.fetch("HOMEBREW_BOOTSNAP_GEM_PATH")
+      rescue LoadError
+        return
+      end
 
       ::Bootsnap.setup(
         cache_dir:,

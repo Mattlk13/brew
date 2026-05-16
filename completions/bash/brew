@@ -1147,7 +1147,6 @@ _brew_exec() {
       --formulae
       --help
       --quiet
-      --skip-update
       --verbose
       "
       return
@@ -3303,7 +3302,6 @@ _brew_which_formula() {
       --explain
       --help
       --quiet
-      --skip-update
       --verbose
       "
       return
@@ -3343,7 +3341,6 @@ _brew_x() {
       --formulae
       --help
       --quiet
-      --skip-update
       --verbose
       "
       return

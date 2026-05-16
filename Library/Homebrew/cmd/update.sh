@@ -11,7 +11,7 @@
 # HOMEBREW_FORCE_BREWED_CURL, HOMEBREW_FORCE_BREWED_GIT,
 # HOMEBREW_SYSTEM_CURL_TOO_OLD, HOMEBREW_USER_AGENT_CURL are set by brew.sh
 # shellcheck disable=SC2154
-source "${HOMEBREW_LIBRARY}/Homebrew/utils/executables.sh"
+source "${HOMEBREW_LIBRARY}/Homebrew/utils/api.sh"
 source "${HOMEBREW_LIBRARY}/Homebrew/utils/lock.sh"
 
 macos_version_name() {
@@ -428,8 +428,6 @@ fetch_api_file() {
     do
       time_cond+=("${arg}")
     done < <(api_time_cond_args "${cache_path}")
-    # Keep curl request handling in sync with `download_and_cache_executables_file`
-    # in Library/Homebrew/utils/executables.sh.
     curl \
       "${CURL_DISABLE_CURLRC_ARGS[@]}" \
       --fail --compressed --silent \
@@ -684,12 +682,6 @@ EOS
   fi
 
   safe_cd "${HOMEBREW_REPOSITORY}"
-
-  # This means the user has run `brew which-formula` before and we should fetch executables.txt
-  if [[ "$(git config get --type=bool homebrew.commandnotfound 2>/dev/null)" == "true" ]]
-  then
-    export HOMEBREW_FETCH_EXECUTABLES_TXT=1
-  fi
 
   # if an older system had a newer curl installed, change each repo's remote URL from git to https
   if [[ -n "${HOMEBREW_SYSTEM_CURL_TOO_OLD}" && -x "${HOMEBREW_PREFIX}/opt/curl/bin/curl" ]] &&
@@ -1030,13 +1022,6 @@ EOS
     then
       echo "HOMEBREW_NO_INSTALL_FROM_API set: skipping API JSON downloads."
     fi
-  fi
-
-  # Update executables.txt if the user has ever run `brew which-formula` before.
-  if [[ -n "${HOMEBREW_FETCH_EXECUTABLES_TXT}" ]]
-  then
-    ohai "Downloading executables.txt"
-    fetch_api_file "${HOMEBREW_EXECUTABLES_TXT_ENDPOINT}" "${update_failed_file}"
   fi
 
   if [[ -f "${update_failed_file}" ]]

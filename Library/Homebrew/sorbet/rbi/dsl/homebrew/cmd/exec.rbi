@@ -13,7 +13,4 @@ end
 class Homebrew::Cmd::Exec::Args < Homebrew::CLI::Args
   sig { returns(T.nilable(T::Array[String])) }
   def formulae; end
-
-  sig { returns(T::Boolean) }
-  def skip_update?; end
 end

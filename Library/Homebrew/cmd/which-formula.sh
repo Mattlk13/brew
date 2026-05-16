@@ -13,10 +13,6 @@ homebrew-which-formula() {
         HOMEBREW_EXPLAIN=1
         shift
         ;;
-      --skip-update)
-        HOMEBREW_SKIP_UPDATE=1
-        shift
-        ;;
       --*)
         echo "Unknown option: $1" >&2
         brew help which-formula
@@ -37,7 +33,7 @@ homebrew-which-formula() {
 
   for cmd in "${args[@]}"
   do
-    download_and_cache_executables_file
+    ensure_executables_file
 
     local formulae=()
     local formula

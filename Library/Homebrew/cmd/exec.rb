@@ -11,7 +11,7 @@ module Homebrew
 
       cmd_args do
         usage_banner <<~EOS
-          `exec`, `x` [`--skip-update`] [`--formulae=`<formulae>] [`--`] <command> [<args> ...]
+          `exec`, `x` [`--formulae=`<formulae>] [`--`] <command> [<args> ...]
 
           Run <command> in an environment populated by Homebrew formulae.
 
@@ -29,8 +29,6 @@ module Homebrew
           `#!/usr/bin/env -S brew exec --formulae=jq,yq --`
         EOS
 
-        switch "--skip-update",
-               description: "Skip updating the executables database if any version exists on disk, no matter how old."
         comma_array "--formulae",
                     description: "Comma-separated formulae to install and add to `PATH` before running " \
                                  "<command>."

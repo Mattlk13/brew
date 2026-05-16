@@ -201,12 +201,13 @@ module Homebrew
         cache.fetch("tap_migrations")
       end
 
-      sig { params(regenerate: T::Boolean).void }
-      def self.write_names_and_aliases(regenerate: false)
+      sig { params(regenerate: T::Boolean, legacy_executables_fallback: T::Boolean).void }
+      def self.write_names_and_aliases(regenerate: false, legacy_executables_fallback: false)
         download_and_cache_data! unless cache.key?("formulae")
 
         Homebrew::API.write_names_file!(all_formulae.keys, "formula", regenerate:)
         Homebrew::API.write_aliases_file!(all_aliases, "formula", regenerate:)
+        Homebrew::API.write_executables_file!(all_formulae, regenerate:, legacy_executables_fallback:)
       end
     end
   end
