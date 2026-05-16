@@ -1,9 +1,9 @@
 # typed: false
 # frozen_string_literal: true
 
-require "services/commands/list"
+require "cmd/services"
 
-RSpec.describe Homebrew::Services::Commands::List do
+RSpec.describe Homebrew::Cmd::Services::ListSubcommand do
   describe "#TRIGGERS" do
     it "contains all restart triggers" do
       expect(described_class::TRIGGERS).to eq([nil, "list", "ls"])
@@ -15,14 +15,14 @@ RSpec.describe Homebrew::Services::Commands::List do
       expect(Homebrew::Services::Formulae).to receive(:services_list).and_return([])
       expect do
         allow($stderr).to receive(:tty?).and_return(true)
-        described_class.run
+        described_class.new(Homebrew::Cmd::Services.new(%w[list]).args).run
       end.to output(a_string_including("No services available to control with `brew services`")).to_stderr
     end
 
     it "outputs empty JSON array with empty list and --json" do
       expect(Homebrew::Services::Formulae).to receive(:services_list).and_return([])
       expect do
-        described_class.run(json: true)
+        described_class.new(Homebrew::Cmd::Services.new(%w[list --json]).args).run
       end.to output("[]\n").to_stdout
     end
 
@@ -37,7 +37,7 @@ RSpec.describe Homebrew::Services::Commands::List do
       }
       expect(Homebrew::Services::Formulae).to receive(:services_list).and_return([formula])
       expect do
-        described_class.run
+        described_class.new(Homebrew::Cmd::Services.new(%w[list]).args).run
       end.to output(out).to_stdout
     end
 
@@ -57,7 +57,7 @@ RSpec.describe Homebrew::Services::Commands::List do
 
       expect(Homebrew::Services::Formulae).to receive(:services_list).and_return([formula])
       expect do
-        described_class.run(json: true)
+        described_class.new(Homebrew::Cmd::Services.new(%w[list --json]).args).run
       end.to output(expected_output).to_stdout
     end
   end

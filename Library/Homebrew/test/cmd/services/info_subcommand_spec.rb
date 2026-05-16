@@ -1,9 +1,9 @@
 # typed: false
 # frozen_string_literal: true
 
-require "services/commands/info"
+require "cmd/services"
 
-RSpec.describe Homebrew::Services::Commands::Info do
+RSpec.describe Homebrew::Cmd::Services::InfoSubcommand do
   before do
     allow_any_instance_of(IO).to receive(:tty?).and_return(false)
   end
@@ -17,7 +17,7 @@ RSpec.describe Homebrew::Services::Commands::Info do
   describe "#run" do
     it "fails with empty list" do
       expect do
-        described_class.run([], verbose: false, json: false)
+        described_class.new(Homebrew::Cmd::Services.new(%w[info testball]).args, targets: []).run
       end.to raise_error UsageError,
                          "Invalid usage: Formula(e) missing, please provide a formula name or use `--all`."
     end
@@ -34,7 +34,8 @@ RSpec.describe Homebrew::Services::Commands::Info do
         schedulable: false,
       })
       expect do
-        described_class.run([formula_wrapper], verbose: false, json: false)
+        described_class.new(Homebrew::Cmd::Services.new(%w[info testball]).args,
+                            targets: [formula_wrapper]).run
       end.to output(out).to_stdout
     end
 
@@ -51,7 +52,8 @@ RSpec.describe Homebrew::Services::Commands::Info do
       out = "#{JSON.pretty_generate([formula])}\n"
       formula_wrapper = instance_double(Homebrew::Services::FormulaWrapper, to_hash: formula)
       expect do
-        described_class.run([formula_wrapper], verbose: false, json: true)
+        described_class.new(Homebrew::Cmd::Services.new(%w[info testball --json]).args,
+                            targets: [formula_wrapper]).run
       end.to output(out).to_stdout
     end
   end

@@ -1,9 +1,9 @@
 # typed: false
 # frozen_string_literal: true
 
-require "services/commands/restart"
+require "cmd/services"
 
-RSpec.describe Homebrew::Services::Commands::Restart do
+RSpec.describe Homebrew::Cmd::Services::RestartSubcommand do
   describe "#TRIGGERS" do
     it "contains all restart triggers" do
       expect(described_class::TRIGGERS).to eq(%w[restart relaunch reload r])
@@ -13,7 +13,7 @@ RSpec.describe Homebrew::Services::Commands::Restart do
   describe "#run" do
     it "fails with empty list" do
       expect do
-        described_class.run([], nil, verbose: false)
+        described_class.new(Homebrew::Cmd::Services.new(%w[restart testball]).args, targets: []).run
       end.to raise_error UsageError,
                          "Invalid usage: Formula(e) missing, please provide a formula name or use `--all`."
     end
@@ -23,7 +23,9 @@ RSpec.describe Homebrew::Services::Commands::Restart do
       expect(Homebrew::Services::Cli).not_to receive(:stop)
       expect(Homebrew::Services::Cli).to receive(:start).once
       service = instance_double(Homebrew::Services::FormulaWrapper, service_name: "name", loaded?: false)
-      expect { described_class.run([service], nil, verbose: false) }.not_to raise_error
+      expect do
+        described_class.new(Homebrew::Cmd::Services.new(%w[restart testball]).args, targets: [service]).run
+      end.not_to raise_error
     end
 
     it "starts if services are loaded with file" do
@@ -32,7 +34,9 @@ RSpec.describe Homebrew::Services::Commands::Restart do
       expect(Homebrew::Services::Cli).to receive(:stop).once
       service = instance_double(Homebrew::Services::FormulaWrapper, service_name: "name", loaded?: true,
 service_file_present?: true)
-      expect { described_class.run([service], nil, verbose: false) }.not_to raise_error
+      expect do
+        described_class.new(Homebrew::Cmd::Services.new(%w[restart testball]).args, targets: [service]).run
+      end.not_to raise_error
     end
 
     it "runs if services are loaded without file" do
@@ -41,7 +45,9 @@ service_file_present?: true)
       expect(Homebrew::Services::Cli).to receive(:stop).once
       service = instance_double(Homebrew::Services::FormulaWrapper, service_name: "name", loaded?: true,
 service_file_present?: false)
-      expect { described_class.run([service], nil, verbose: false) }.not_to raise_error
+      expect do
+        described_class.new(Homebrew::Cmd::Services.new(%w[restart testball]).args, targets: [service]).run
+      end.not_to raise_error
     end
   end
 end

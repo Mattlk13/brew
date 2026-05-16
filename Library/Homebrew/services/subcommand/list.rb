@@ -1,33 +1,45 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "abstract_subcommand"
+
 require "services/cli"
 require "services/formulae"
 require "utils/output"
-
 module Homebrew
-  module Services
-    module Commands
-      module List
-        extend Utils::Output::Mixin
+  module Cmd
+    class Services < Homebrew::AbstractCommand
+      class ListSubcommand < Homebrew::AbstractSubcommand
+        subcommand_args aliases: ["ls"], default: true do
+          usage_banner <<~EOS
+            [`sudo`] `brew services` [`list`] [`--json`] [`--debug`]:
+            List information about all managed services for the current user (or root).
+            Provides more output from Homebrew and `launchctl`(1) or `systemctl`(1) if run with `--debug`.
+          EOS
+          named_args :none
+          switch "--json",
+                 description: "Output as JSON."
+        end
 
-        TRIGGERS = T.let([nil, "list", "ls"].freeze, T::Array[T.nilable(String)])
-
-        sig { params(json: T::Boolean).void }
-        def self.run(json: false)
-          formulae = Formulae.services_list
+        sig { override.void }
+        def run
+          formulae = Homebrew::Services::Formulae.services_list
           if formulae.blank?
-            opoo "No services available to control with `#{Services::Cli.bin}`" if $stderr.tty?
-            puts "[]" if json
+            opoo "No services available to control with `#{Homebrew::Services::Cli.bin}`" if $stderr.tty?
+            puts "[]" if args.json?
             return
           end
 
-          if json
-            print_json(formulae)
+          if args.json?
+            self.class.print_json(formulae)
           else
-            print_table(formulae)
+            self.class.print_table(formulae)
           end
         end
+
+        extend Utils::Output::Mixin
+
+        TRIGGERS = T.let([nil, "list", "ls"].freeze, T::Array[T.nilable(String)])
 
         JSON_FIELDS = T.let([:name, :status, :user, :file, :exit_code].freeze, T::Array[Symbol])
 
