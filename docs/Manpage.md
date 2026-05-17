@@ -121,9 +121,17 @@ Control Homebrew's anonymous aggregate user behaviour analytics. Read more at
 
 : Display the current state of Homebrew's analytics.
 
-`brew analytics` (`on`\|`off`)
+`brew analytics regenerate-uuid`
 
-: Turn Homebrew's analytics on or off respectively.
+: Delete Homebrew's legacy analytics UUID.
+
+`brew analytics on`
+
+: Turn Homebrew's analytics on.
+
+`brew analytics off`
+
+: Turn Homebrew's analytics off.
 
 ### `autoremove` \[`--dry-run`\]
 
@@ -452,13 +460,17 @@ Show lists of built-in and external commands.
 Control whether Homebrew automatically links external tap shell completion
 files. Read more at <https://docs.brew.sh/Shell-Completion>.
 
+`brew completions unlink`
+
+: Unlink Homebrew's completions.
+
 `brew completions` \[`state`\]
 
 : Display the current state of Homebrew's completions.
 
-`brew completions` (`link`\|`unlink`)
+`brew completions link`
 
-: Link or unlink Homebrew's completions.
+: Link Homebrew's completions.
 
 ### `config`, `--config`
 
@@ -624,9 +636,13 @@ latest stable version along with some other behaviour changes.
 
 : Display the current state of Homebrew's developer mode.
 
-`brew developer` (`on`\|`off`)
+`brew developer on`
 
-: Turn Homebrew's developer mode on or off respectively.
+: Turn Homebrew's developer mode on.
+
+`brew developer off`
+
+: Turn Homebrew's developer mode off.
 
 ### `docs`
 

@@ -418,19 +418,78 @@ _brew_alias() {
 
 _brew_analytics() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
+  local subcommand=""
+  local i
+  for (( i = 2; i < COMP_CWORD; i++ ))
+  do
+    case "${COMP_WORDS[i]}" in
+      state) subcommand="state"; break ;;
+      regenerate-uuid) subcommand="regenerate-uuid"; break ;;
+      on) subcommand="on"; break ;;
+      off) subcommand="off"; break ;;
+      *) ;;
+    esac
+  done
   case "${cur}" in
     -*)
-      __brewcomp "
-      --debug
-      --help
-      --quiet
-      --verbose
-      "
-      return
+      case "${subcommand}" in
+        "")
+          __brewcomp "
+          --debug
+          --help
+          --quiet
+          --verbose
+          "
+          return
+          ;;
+state)
+        __brewcomp "
+        --debug
+        --help
+        --quiet
+        --verbose
+        "
+        return
+        ;;
+regenerate-uuid)
+        __brewcomp "
+        --debug
+        --help
+        --quiet
+        --verbose
+        "
+        return
+        ;;
+on)
+        __brewcomp "
+        --debug
+        --help
+        --quiet
+        --verbose
+        "
+        return
+        ;;
+off)
+        __brewcomp "
+        --debug
+        --help
+        --quiet
+        --verbose
+        "
+        return
+        ;;
+        *) ;;
+      esac
       ;;
     *) ;;
   esac
-  __brewcomp "state on off regenerate-uuid"
+  case "${subcommand}" in
+    "")
+      __brewcomp "state regenerate-uuid on off"
+      ;;
+
+    *) ;;
+  esac
 }
 
 _brew_audit() {
@@ -1047,19 +1106,68 @@ _brew_commands() {
 
 _brew_completions() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
+  local subcommand=""
+  local i
+  for (( i = 2; i < COMP_CWORD; i++ ))
+  do
+    case "${COMP_WORDS[i]}" in
+      unlink) subcommand="unlink"; break ;;
+      state) subcommand="state"; break ;;
+      link) subcommand="link"; break ;;
+      *) ;;
+    esac
+  done
   case "${cur}" in
     -*)
-      __brewcomp "
-      --debug
-      --help
-      --quiet
-      --verbose
-      "
-      return
+      case "${subcommand}" in
+        "")
+          __brewcomp "
+          --debug
+          --help
+          --quiet
+          --verbose
+          "
+          return
+          ;;
+unlink)
+        __brewcomp "
+        --debug
+        --help
+        --quiet
+        --verbose
+        "
+        return
+        ;;
+state)
+        __brewcomp "
+        --debug
+        --help
+        --quiet
+        --verbose
+        "
+        return
+        ;;
+link)
+        __brewcomp "
+        --debug
+        --help
+        --quiet
+        --verbose
+        "
+        return
+        ;;
+        *) ;;
+      esac
       ;;
     *) ;;
   esac
-  __brewcomp "state link unlink"
+  case "${subcommand}" in
+    "")
+      __brewcomp "unlink state link"
+      ;;
+
+    *) ;;
+  esac
 }
 
 _brew_config() {
@@ -1224,19 +1332,68 @@ _brew_desc() {
 
 _brew_developer() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
+  local subcommand=""
+  local i
+  for (( i = 2; i < COMP_CWORD; i++ ))
+  do
+    case "${COMP_WORDS[i]}" in
+      state) subcommand="state"; break ;;
+      on) subcommand="on"; break ;;
+      off) subcommand="off"; break ;;
+      *) ;;
+    esac
+  done
   case "${cur}" in
     -*)
-      __brewcomp "
-      --debug
-      --help
-      --quiet
-      --verbose
-      "
-      return
+      case "${subcommand}" in
+        "")
+          __brewcomp "
+          --debug
+          --help
+          --quiet
+          --verbose
+          "
+          return
+          ;;
+state)
+        __brewcomp "
+        --debug
+        --help
+        --quiet
+        --verbose
+        "
+        return
+        ;;
+on)
+        __brewcomp "
+        --debug
+        --help
+        --quiet
+        --verbose
+        "
+        return
+        ;;
+off)
+        __brewcomp "
+        --debug
+        --help
+        --quiet
+        --verbose
+        "
+        return
+        ;;
+        *) ;;
+      esac
       ;;
     *) ;;
   esac
-  __brewcomp "state on off"
+  case "${subcommand}" in
+    "")
+      __brewcomp "state on off"
+      ;;
+
+    *) ;;
+  esac
 }
 
 _brew_dispatch_build_bottle() {

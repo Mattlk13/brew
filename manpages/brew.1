@@ -75,8 +75,14 @@ Control Homebrew\[u2019]s anonymous aggregate user behaviour analytics\. Read mo
 \fBbrew analytics\fP [\fBstate\fP]
 Display the current state of Homebrew\[u2019]s analytics\.
 .TP
-\fBbrew analytics\fP (\fBon\fP|\fBoff\fP)
-Turn Homebrew\[u2019]s analytics on or off respectively\.
+\fBbrew analytics regenerate\-uuid\fP
+Delete Homebrew\[u2019]s legacy analytics UUID\.
+.TP
+\fBbrew analytics on\fP
+Turn Homebrew\[u2019]s analytics on\.
+.TP
+\fBbrew analytics off\fP
+Turn Homebrew\[u2019]s analytics off\.
 .SS "\fBautoremove\fP \fR[\fB\-\-dry\-run\fP]"
 Uninstall formulae that were only installed as a dependency of another formula and are now no longer needed\.
 .TP
@@ -278,11 +284,14 @@ Control whether Homebrew automatically links external tap shell completion files
 .UR https://docs\.brew\.sh/Shell\-Completion
 .UE \&\.
 .TP
+\fBbrew completions unlink\fP
+Unlink Homebrew\[u2019]s completions\.
+.TP
 \fBbrew completions\fP [\fBstate\fP]
 Display the current state of Homebrew\[u2019]s completions\.
 .TP
-\fBbrew completions\fP (\fBlink\fP|\fBunlink\fP)
-Link or unlink Homebrew\[u2019]s completions\.
+\fBbrew completions link\fP
+Link Homebrew\[u2019]s completions\.
 .SS "\fBconfig\fP, \fB\-\-config\fP"
 Show Homebrew and system configuration info useful for debugging\. If you file a bug report, you will be required to provide this information\.
 .SS "\fBdeps\fP \fR[\fIoptions\fP] \fR[\fIformula\fP|\fIcask\fP \.\.\.]"
@@ -389,8 +398,11 @@ Control Homebrew\[u2019]s developer mode\. When developer mode is enabled, \fBbr
 \fBbrew developer\fP [\fBstate\fP]
 Display the current state of Homebrew\[u2019]s developer mode\.
 .TP
-\fBbrew developer\fP (\fBon\fP|\fBoff\fP)
-Turn Homebrew\[u2019]s developer mode on or off respectively\.
+\fBbrew developer on\fP
+Turn Homebrew\[u2019]s developer mode on\.
+.TP
+\fBbrew developer off\fP
+Turn Homebrew\[u2019]s developer mode off\.
 .SS "\fBdocs\fP"
 Open Homebrew\[u2019]s online documentation at 
 .UR https://docs\.brew\.sh
