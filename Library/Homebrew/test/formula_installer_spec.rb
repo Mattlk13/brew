@@ -137,6 +137,60 @@ RSpec.describe FormulaInstaller do
     end
   end
 
+  describe "#fetch_bottle_tab" do
+    it "does not enqueue cached bottle manifests" do
+      formula = formula("deno") do
+        url "https://brew.sh/deno-2.7.11.tar.gz"
+
+        bottle do
+          root_url HOMEBREW_BOTTLE_DEFAULT_DOMAIN
+          sha256 cellar: :any_skip_relocation,
+                 Utils::Bottles.tag.to_sym => "d7b9f4e8bf83608b71fe958a99f19f2e5e68bb2582965d32e41759c24f1aef97"
+        end
+      end
+      installer = described_class.new(formula)
+      installer.download_queue = instance_double(Homebrew::DownloadQueue)
+      manifest_resource = formula.bottle&.github_packages_manifest_resource
+      cached_download = manifest_resource&.cached_download
+
+      allow(manifest_resource).to receive(:downloaded?).and_return(true)
+      expect(manifest_resource).to receive(:verify_download_integrity).with(cached_download) do
+        expect(Context.current.quiet?).to be(true)
+      end
+      expect(manifest_resource).not_to receive(:clear_cache)
+      expect(installer.download_queue).not_to receive(:enqueue)
+
+      installer.fetch_bottle_tab(enqueue: true)
+    end
+
+    it "enqueues invalid cached bottle manifests" do
+      formula = formula("deno") do
+        url "https://brew.sh/deno-2.7.11.tar.gz"
+
+        bottle do
+          root_url HOMEBREW_BOTTLE_DEFAULT_DOMAIN
+          sha256 cellar: :any_skip_relocation,
+                 Utils::Bottles.tag.to_sym => "d7b9f4e8bf83608b71fe958a99f19f2e5e68bb2582965d32e41759c24f1aef97"
+        end
+      end
+      installer = described_class.new(formula)
+      installer.download_queue = instance_double(Homebrew::DownloadQueue)
+      manifest_resource = formula.bottle&.github_packages_manifest_resource
+
+      allow(manifest_resource).to receive(:downloaded?).and_return(true)
+      manifest_resource&.instance_variable_set(:@manifest_annotations, {})
+      expect(manifest_resource).to receive(:verify_download_integrity) do
+        expect(Context.current.quiet?).to be(true)
+        raise Resource::BottleManifest::Error
+      end
+      expect(installer.download_queue).to receive(:enqueue).with(manifest_resource)
+
+      installer.fetch_bottle_tab(enqueue: true)
+
+      expect(manifest_resource&.instance_variable_get(:@manifest_annotations)).to be_nil
+    end
+  end
+
   describe "linking defaults" do
     it "links non-keg-only formulae when link_keg is false" do
       ordinary_formula = formula "homebrew-link-default" do

@@ -385,6 +385,12 @@ module Homebrew
                      "For more information, see: <https://docs.brew.sh/Analytics>",
         boolean:     true,
       },
+      HOMEBREW_NO_ASK:                           {
+        description: "If set, do not ask for confirmation before downloading and installing, upgrading or " \
+                     "reinstalling formulae and casks. This is a no-op until ask mode becomes the default " \
+                     "behaviour in a later release.",
+        boolean:     true,
+      },
       HOMEBREW_NO_AUTOREMOVE:                    {
         description: "If set, calls to `brew cleanup` and `brew uninstall` will not automatically " \
                      "remove unused formula dependents.",
