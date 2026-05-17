@@ -55,14 +55,13 @@ RSpec.describe Homebrew::Bundle::Commands::Dump do
 
     before do
       ENV["HOMEBREW_BUNDLE_FILE"] = ""
+      stub_formula_loader formula("mas") { url "mas-1.0" }
       allow_any_instance_of(Pathname).to receive(:exist?).and_return(true)
       allow(Homebrew::Bundle).to receive(:cask_installed?).and_return(true)
       allow(Cask::Caskroom).to receive(:casks).and_return([])
 
       # don't try to load gcc/glibc
       allow(DevelopmentTools).to receive_messages(needs_libc_formula?: false, needs_compiler_formula?: false)
-
-      stub_formula_loader formula("mas") { url "mas-1.0" }
     end
 
     it "doesn't raise error" do
