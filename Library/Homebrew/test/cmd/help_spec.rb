@@ -14,6 +14,76 @@ RSpec.describe Homebrew::Cmd::HelpCmd, :integration_test do
         .and not_to_output.to_stderr
         .and be_a_success
     end
+
+    it "prints the originating tap for an external command from a third-party tap" do
+      tap_path = HOMEBREW_TAP_DIRECTORY/"thirdparty/homebrew-foo"
+      tap_path.mkpath
+      tap_path.cd do
+        system "git", "init"
+        system "git", "remote", "add", "origin", "https://github.com/thirdparty/homebrew-foo"
+        FileUtils.touch "readme"
+        system "git", "add", "--all"
+        system "git", "commit", "-m", "init"
+      end
+      cmd_path = tap_path/"cmd/hello-tap.rb"
+      cmd_path.dirname.mkpath
+      cmd_path.write <<~RUBY
+        # typed: strict
+        # frozen_string_literal: true
+
+        require "abstract_command"
+
+        module Homebrew
+          module Cmd
+            class HelloTap < AbstractCommand
+              cmd_args do
+                description "A friendly greeter from a tap."
+              end
+
+              sig { override.void }
+              def run; end
+            end
+          end
+        end
+      RUBY
+      cmd_path.chmod(0755)
+
+      expect { brew "help", "hello-tap" }
+        .to output(%r{^From tap: thirdparty/foo$}).to_stdout
+        .and not_to_output.to_stderr
+        .and be_a_success
+    ensure
+      FileUtils.rm_rf HOMEBREW_TAP_DIRECTORY/"thirdparty"
+    end
+
+    it "does not print the originating tap for an external command from an official tap" do
+      tap_path = setup_test_tap
+      cmd_path = tap_path/"cmd/hello-tap.rb"
+      cmd_path.dirname.mkpath
+      cmd_path.write <<~RUBY
+        # typed: strict
+        # frozen_string_literal: true
+
+        require "abstract_command"
+
+        module Homebrew
+          module Cmd
+            class HelloTap < AbstractCommand
+              cmd_args do
+                description "A friendly greeter from a tap."
+              end
+
+              sig { override.void }
+              def run; end
+            end
+          end
+        end
+      RUBY
+      cmd_path.chmod(0755)
+
+      expect { brew "help", "hello-tap" }
+        .not_to output(/^From tap:/).to_stdout
+    end
   end
 
   describe "cat" do

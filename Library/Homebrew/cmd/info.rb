@@ -660,6 +660,8 @@ module Homebrew
         end
 
         puts "From: #{Formatter.url(github_info(formula))}"
+        formula_tap = formula.tap
+        puts "Tap: #{formula_tap.name}" if formula_tap && !formula_tap.official?
 
         puts "License: #{SPDX.license_expression_to_string formula.license}" if formula.license.present?
         metadata = self.class.metadata_lines(formula)
