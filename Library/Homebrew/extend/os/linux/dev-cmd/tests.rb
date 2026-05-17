@@ -26,14 +26,20 @@ module OS
         sig { void }
         def check_test_environment!
           super
-          return unless GitHub::Actions.env_set?
+          return unless Homebrew::EnvConfig.sandbox_linux?
 
           require "sandbox"
-          with_env(HOMEBREW_SANDBOX_LINUX: "1") do
-            return if ::Sandbox.available?
 
-            raise UsageError, "GitHub Actions Linux tests require a working rootless Bubblewrap sandbox."
+          if GitHub::Actions.env_set?
+            ::Sandbox.configure!
+          else
+            ::Sandbox.ensure_sandbox_installed!(install_from_tests: true)
           end
+          return if ::Sandbox.available?
+
+          reason = ::Sandbox.failure_reason ||
+                   "`HOMEBREW_SANDBOX_LINUX` requires a working rootless Bubblewrap sandbox."
+          raise UsageError, reason
         end
       end
     end

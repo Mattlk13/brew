@@ -261,11 +261,6 @@ begin
   ENV["HOMEBREW_INTERNAL_ALLOW_PACKAGES_FROM_PATHS"] = "1"
 
   formula_path = ARGV.first
-  # `build.rb` is handed a concrete formula file; keep reparsing from falling
-  # back to the API inside the Linux sandbox.
-  # TODO: remove this and fix the sandbox code instead.
-  ENV["HOMEBREW_NO_INSTALL_FROM_API"] = "1" if ENV["HOMEBREW_SANDBOX_LINUX"] && formula_path&.end_with?(".rb")
-
   args = Homebrew::Cmd::InstallCmd.new.args
   Context.current = args.context
 

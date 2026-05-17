@@ -6,6 +6,22 @@ require "sandbox"
 RSpec.describe Sandbox do
   subject(:sandbox) { described_class.new }
 
+  describe "::failure_reason" do
+    let(:sandbox_class) { Class.new(described_class) }
+
+    it "returns nil if the sandbox is available" do
+      allow(sandbox_class).to receive(:state).and_return(:available)
+
+      expect(sandbox_class.failure_reason).to be_nil
+    end
+
+    it "returns a sandbox failure reason if the sandbox is unavailable" do
+      allow(sandbox_class).to receive(:state).and_return(:unavailable)
+
+      expect(sandbox_class.failure_reason).to match(/sandbox/i)
+    end
+  end
+
   describe "::executable" do
     let(:sandbox_class) do
       Class.new(described_class) do

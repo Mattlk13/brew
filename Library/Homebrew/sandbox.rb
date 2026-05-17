@@ -74,8 +74,35 @@ class Sandbox
     false
   end
 
+  sig { params(install_from_tests: T::Boolean).void }
+  def self.ensure_sandbox_installed!(install_from_tests: false); end
+
+  sig { returns(Symbol) }
+  def self.state
+    available? ? :available : :unavailable
+  end
+
+  sig { returns(T.nilable(String)) }
+  def self.failure_reason
+    return if state == :available
+
+    "The sandbox is not available."
+  end
+
   sig { void }
-  def self.ensure_sandbox_installed!; end
+  def self.reset_state!; end
+
+  sig { returns(T::Array[String]) }
+  def self.configuration_commands = []
+
+  sig { returns(T::Array[String]) }
+  def self.configuration_command_messages = []
+
+  sig { void }
+  def self.configure!
+    ensure_sandbox_installed!
+    reset_state!
+  end
 
   sig { returns(String) }
   def self.executable_name

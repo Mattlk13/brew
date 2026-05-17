@@ -222,9 +222,6 @@ RSpec.shared_context "integration test" do # rubocop:disable RSpec/ContextWordin
   end
 
   def install_test_formula(name, content = nil, build_bottle: false)
-    # Synthetic test formulae must stay local so Linux sandbox builds do not
-    # need API cache or source paths mounted.
-    ENV["HOMEBREW_NO_INSTALL_FROM_API"] = "1"
     setup_test_formula(name, content)
     fi = FormulaInstaller.new(Formula[name], build_bottle:, installed_on_request: true)
     fi.prelude_fetch

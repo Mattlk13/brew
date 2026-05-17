@@ -166,6 +166,24 @@ RSpec.describe Homebrew::EnvConfig do
     end
   end
 
+  describe ".sandbox_linux?" do
+    before do
+      ENV["HOMEBREW_NO_SANDBOX_LINUX"] = nil
+      ENV["HOMEBREW_SANDBOX_LINUX"] = nil
+    end
+
+    it "returns true if HOMEBREW_SANDBOX_LINUX is set" do
+      ENV["HOMEBREW_SANDBOX_LINUX"] = "1"
+      expect(env_config.sandbox_linux?).to be(true)
+    end
+
+    it "returns false if HOMEBREW_NO_SANDBOX_LINUX is set" do
+      ENV["HOMEBREW_NO_SANDBOX_LINUX"] = "1"
+      ENV["HOMEBREW_SANDBOX_LINUX"] = "1"
+      expect(env_config.sandbox_linux?).to be(false)
+    end
+  end
+
   describe ".use_internal_api?" do
     it "returns true if HOMEBREW_USE_INTERNAL_API is set" do
       ENV["HOMEBREW_USE_INTERNAL_API"] = "1"

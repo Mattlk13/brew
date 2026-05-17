@@ -469,6 +469,10 @@ module Homebrew
                      "shadowed by other commands earlier on `$PATH`.",
         boolean:     true,
       },
+      HOMEBREW_NO_SANDBOX_LINUX:                 {
+        description: "If set, disable the Linux sandbox.",
+        boolean:     true,
+      },
       HOMEBREW_NO_UPDATE_REPORT_NEW:             {
         description: "If set, `brew update` will not show the list of newly added formulae/casks.",
         boolean:     true,
@@ -626,6 +630,7 @@ module Homebrew
       :HOMEBREW_CASK_OPTS_REQUIRE_SHA,
       :HOMEBREW_FORBID_PACKAGES_FROM_PATHS,
       :HOMEBREW_DOWNLOAD_CONCURRENCY,
+      :HOMEBREW_SANDBOX_LINUX,
       :HOMEBREW_UPGRADE_AUTO_UPDATES_CASKS,
       :HOMEBREW_USE_INTERNAL_API,
     ]).freeze, T::Set[Symbol])
@@ -767,6 +772,14 @@ module Homebrew
       end
 
       [concurrency, 1].max
+    end
+
+    sig { returns(T::Boolean) }
+    def sandbox_linux?
+      return false if Homebrew::EnvConfig.no_sandbox_linux?
+
+      sandbox_linux = ENV.fetch("HOMEBREW_SANDBOX_LINUX", nil)
+      sandbox_linux.present? && FALSY_VALUES.exclude?(sandbox_linux.downcase)
     end
 
     sig { returns(T::Boolean) }

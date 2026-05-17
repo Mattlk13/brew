@@ -5,6 +5,7 @@ require "test_bot/step"
 require "test_bot/test_runner"
 
 require "date"
+require "env_config"
 require "json"
 
 require "development_tools"
@@ -32,6 +33,21 @@ module Homebrew
     def local?(args)
       args.local? || GitHub::Actions.env_set?
     end
+
+    sig { void }
+    def setup_github_actions_sandbox!
+      return unless GitHub::Actions.env_set?
+      return unless Homebrew::EnvConfig.sandbox_linux?
+
+      return if configure_sandbox!
+
+      ENV["HOMEBREW_NO_SANDBOX_LINUX"] = "1"
+      require "sandbox"
+      Sandbox.reset_state!
+    end
+
+    sig { returns(T::Boolean) }
+    def configure_sandbox! = true
 
     sig { params(tap: T.nilable(String)).returns(T.nilable(Tap)) }
     def resolve_test_tap(tap = nil)
@@ -87,6 +103,8 @@ module Homebrew
         FileUtils.mkdir_p logs
         FileUtils.cp gitconfig, home if File.exist?(gitconfig)
       end
+
+      setup_github_actions_sandbox!
 
       tap = resolve_test_tap(args.tap)
 

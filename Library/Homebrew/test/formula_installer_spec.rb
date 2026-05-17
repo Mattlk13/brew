@@ -22,12 +22,8 @@ RSpec.describe FormulaInstaller do
 
     installer = described_class.new(formula, **options)
 
-    # These fixture installs must stay local so Linux sandbox builds do not
-    # need API cache or source paths mounted.
-    with_env(HOMEBREW_NO_INSTALL_FROM_API: "1") do
-      installer.fetch
-      installer.install
-    end
+    installer.fetch
+    installer.install
 
     keg = Keg.new(formula.prefix)
 
@@ -849,12 +845,8 @@ RSpec.describe FormulaInstaller do
 
     it "shows audit problems if HOMEBREW_DEVELOPER is set" do
       ENV["HOMEBREW_DEVELOPER"] = "1"
-      # Keep this fixture install local so Linux sandbox builds do not need API
-      # cache or source paths mounted.
-      with_env(HOMEBREW_NO_INSTALL_FROM_API: "1") do
-        formula_installer.fetch
-        formula_installer.install
-      end
+      formula_installer.fetch
+      formula_installer.install
       expect(formula_installer).to receive(:audit_installed).and_call_original
       formula_installer.caveats
     end

@@ -52,9 +52,9 @@ RSpec.describe Sandbox, :needs_linux do
     let(:sandbox_class) do
       Class.new(described_class) do
         class << self
-          attr_accessor :test_executable
+          attr_accessor :test_executable_candidate_paths
 
-          def executable = test_executable
+          def executable_candidate_paths = test_executable_candidate_paths
         end
       end
     end
@@ -64,7 +64,7 @@ RSpec.describe Sandbox, :needs_linux do
     before do
       FileUtils.touch bubblewrap
       FileUtils.chmod "+x", bubblewrap
-      sandbox_class.test_executable = bubblewrap
+      sandbox_class.test_executable_candidate_paths = PATH.new(bubblewrap_dir)
     end
 
     it "returns false unless Linux sandboxing is enabled" do
@@ -74,13 +74,14 @@ RSpec.describe Sandbox, :needs_linux do
     end
 
     it "returns false when bubblewrap is unavailable" do
-      sandbox_class.test_executable = nil
+      sandbox_class.test_executable_candidate_paths = PATH.new(mktmpdir)
 
       expect(sandbox_class.available?).to be(false)
+      expect(sandbox_class.state).to eq(:missing)
     end
 
-    it "probes unprivileged namespace support" do
-      expect(sandbox_class).to receive(:system).with(
+    it "probes unprivileged namespace support once" do
+      expect(sandbox_class).to receive(:system).once.with(
         bubblewrap.to_s,
         "--unshare-user",
         "--unshare-ipc",
@@ -96,6 +97,80 @@ RSpec.describe Sandbox, :needs_linux do
       ).and_return(true)
 
       expect(sandbox_class.available?).to be(true)
+      expect(sandbox_class.state).to eq(:available)
+      expect(sandbox_class.failure_reason).to be_nil
+    end
+
+    it "reports setuid bubblewrap candidates" do
+      allow(File).to receive(:stat).and_call_original
+      allow(File).to receive(:stat).with(bubblewrap).and_return(instance_double(File::Stat, setuid?: true))
+
+      expect(sandbox_class.available?).to be(false)
+      expect(sandbox_class.state).to eq(:setuid)
+      expect(sandbox_class.failure_reason).to include("setuid")
+    end
+
+    it "reports bubblewrap sandbox probe failures" do
+      allow(sandbox_class).to receive(:system).and_return(false)
+
+      expect(sandbox_class.available?).to be(false)
+      expect(sandbox_class.state).to eq(:unavailable)
+      expect(sandbox_class.failure_reason).to include("cannot create a rootless sandbox")
+    end
+  end
+
+  describe "::configuration_commands" do
+    let(:sandbox_class) { Class.new(described_class) }
+
+    def expect_sandbox_configuration_command(sandbox_class, assignment, result:)
+      command = ["sudo", "sysctl", "-w", assignment]
+
+      expect(sandbox_class).to receive(:puts).with("  #{command.join(" ")}").ordered
+      expect(sandbox_class).to receive(:system).with(*command).and_return(result).ordered
+    end
+
+    it "lists Linux sandbox sysctl commands" do
+      expect(sandbox_class.configuration_commands).to eq([
+        "sudo sysctl -w kernel.unprivileged_userns_clone=1",
+        "sudo sysctl -w user.max_user_namespaces=28633",
+        "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true",
+      ])
+    end
+
+    it "uses system Bubblewrap when configuring Linux sandbox sysctls" do
+      allow(sandbox_class).to receive(:bubblewrap_executable).and_return(Pathname("/usr/bin/bwrap"))
+      expect(sandbox_class).not_to receive(:ensure_sandbox_installed!)
+      expect(sandbox_class).to receive(:ohai).with("Configuring Bubblewrap...").ordered
+      expect_sandbox_configuration_command(sandbox_class, "kernel.unprivileged_userns_clone=1", result: true)
+      expect_sandbox_configuration_command(sandbox_class, "user.max_user_namespaces=28633", result: true)
+      expect_sandbox_configuration_command(sandbox_class, "kernel.apparmor_restrict_unprivileged_userns=0",
+                                           result: false)
+
+      sandbox_class.configure!
+    end
+
+    it "does not configure Linux sandbox sysctls when Bubblewrap remains unavailable" do
+      expect(sandbox_class).to receive(:bubblewrap_executable).twice.and_return(nil)
+      expect(sandbox_class).to receive(:ensure_sandbox_installed!)
+        .with(install_from_tests: true)
+      expect(sandbox_class).not_to receive(:system)
+
+      sandbox_class.configure!
+    end
+
+    it "installs Bubblewrap and configures Linux sandbox sysctls" do
+      expect(sandbox_class).to receive(:bubblewrap_executable)
+        .twice
+        .and_return(nil, Pathname(HOMEBREW_PREFIX/"bin/bwrap"))
+      expect(sandbox_class).to receive(:ensure_sandbox_installed!)
+        .with(install_from_tests: true)
+      expect(sandbox_class).to receive(:ohai).with("Configuring Bubblewrap...").ordered
+      expect_sandbox_configuration_command(sandbox_class, "kernel.unprivileged_userns_clone=1", result: true)
+      expect_sandbox_configuration_command(sandbox_class, "user.max_user_namespaces=28633", result: true)
+      expect_sandbox_configuration_command(sandbox_class, "kernel.apparmor_restrict_unprivileged_userns=0",
+                                           result: false)
+
+      sandbox_class.configure!
     end
   end
 
@@ -120,23 +195,22 @@ RSpec.describe Sandbox, :needs_linux do
       expect(args.each_cons(2)).to include(["--chdir", tmpdir.to_s])
     end
 
-    it "exposes the Homebrew library path" do
-      expect(args.index(HOMEBREW_LIBRARY_PATH.dirname.to_s)).to be < args.index(HOMEBREW_LIBRARY_PATH.to_s)
-      expect(args.each_cons(3)).to include(["--ro-bind", HOMEBREW_LIBRARY_PATH.to_s, HOMEBREW_LIBRARY_PATH.to_s])
+    it "exposes the host filesystem read-only" do
+      expect(args.each_cons(3)).to include(["--ro-bind", "/", "/"])
+      expect(args.index("--ro-bind")).to be < args.index("--dev")
     end
 
-    it "exposes Linux runtime paths" do
-      %w[/run /sys].select { |path| File.exist?(path) }.each do |path|
-        expect(args.each_cons(3)).to include(["--ro-bind", path, path])
-      end
+    it "overlays Linux runtime filesystems" do
+      expect(args.each_cons(2)).to include(["--dev", "/dev"], ["--proc", "/proc"])
     end
 
-    it "maps allowed reads to read-only bind mounts" do
+    it "does not need explicit mounts for allowed reads" do
       file = mktmpdir/"foo.rb"
       FileUtils.touch file
       sandbox.allow_read path: file
 
-      expect(args.each_cons(3)).to include(["--ro-bind", file.to_s, file.to_s])
+      expect(args.each_cons(3)).to include(["--ro-bind", "/", "/"])
+      expect(args.each_cons(3)).not_to include(["--ro-bind", file.to_s, file.to_s])
     end
 
     it "uses Linux temp paths instead of macOS temp paths" do
