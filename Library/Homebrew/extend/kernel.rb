@@ -86,6 +86,7 @@ module Kernel
   # Find a command.
   #
   # @api public
+  # Keep in sync with `which` in Library/Homebrew/utils.sh.
   sig { params(cmd: String, path: PATH::Elements).returns(T.nilable(Pathname)) }
   def which(cmd, path = ENV.fetch("PATH"))
     PATH.new(path).each do |p|

@@ -10,6 +10,7 @@ module Utils
 
       requires_ancestor { Kernel }
 
+      # Keep in sync with `ohai` in Library/Homebrew/utils.sh.
       sig { params(title: String).returns(String) }
       def ohai_title(title)
         verbose = if respond_to?(:verbose?)
@@ -62,6 +63,7 @@ module Utils
       # Print a warning message.
       #
       # @api public
+      # Keep in sync with `opoo` in Library/Homebrew/utils.sh.
       sig { params(message: T.any(String, Exception)).void }
       def opoo(message)
         require "utils/github/actions"
@@ -88,6 +90,7 @@ module Utils
       # Print an error message.
       #
       # @api public
+      # Keep in sync with `onoe` in Library/Homebrew/utils.sh.
       sig { params(message: T.any(String, Exception)).void }
       def onoe(message)
         require "utils/github/actions"
@@ -131,6 +134,7 @@ module Utils
       # Print an error message and fail immediately.
       #
       # @api public
+      # Keep in sync with `odie` in Library/Homebrew/utils.sh.
       sig { params(error: T.any(String, Exception)).returns(T.noreturn) }
       def odie(error)
         onoe error
@@ -233,6 +237,8 @@ module Utils
         odeprecated(method, replacement, disable: true, disable_on:, disable_for_developers:, caller:)
       end
 
+      # Keep status labels, colours and emoji in sync with
+      # `pretty_installed` in Library/Homebrew/utils.sh.
       sig { params(string: String).returns(String) }
       def pretty_installed(string)
         if !$stdout.tty?
@@ -284,6 +290,8 @@ module Utils
         end
       end
 
+      # Keep status labels, colours and emoji in sync with
+      # `pretty_uninstalled` in Library/Homebrew/utils.sh.
       sig { params(string: String).returns(String) }
       def pretty_uninstalled(string)
         if !$stdout.tty?
