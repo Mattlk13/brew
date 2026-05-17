@@ -80,7 +80,7 @@ RSpec.describe Homebrew::API::Formula do
       expect((cache_dir/"internal/executables.txt").read).to eq("foo:foo-bin food\n")
     end
 
-    it "downloads the executables database if formula JSON has no executable entries" do
+    it "removes the executables database if formula JSON has no executable entries" do
       allow(Utils::Curl).to receive(:curl_download) do |*args, **kwargs|
         raise "unexpected download URL: #{args.last}" unless args.last.end_with?("formula.jws.json")
 
@@ -92,18 +92,16 @@ RSpec.describe Homebrew::API::Formula do
           }]
         JSON
       end
-      allow(Homebrew::API).to receive(:download_executables_file_from_github_packages!) do |target|
-        target.dirname.mkpath
-        target.write "foo:foo-bin\n"
-        true
-      end
+      expect(Homebrew::API).not_to receive(:download_executables_file_from_github_packages!)
       allow(Homebrew::API).to receive(:verify_and_parse_jws) do |json_data|
         [true, json_data]
       end
+      (cache_dir/"internal").mkpath
+      (cache_dir/"internal/executables.txt").write "foo:foo-bin\n"
 
-      described_class.write_names_and_aliases(legacy_executables_fallback: true)
+      described_class.write_names_and_aliases
 
-      expect((cache_dir/"internal/executables.txt").read).to eq("foo:foo-bin\n")
+      expect(cache_dir/"internal/executables.txt").not_to exist
     end
 
     it "does not download the executables database while reading formula JSON" do
