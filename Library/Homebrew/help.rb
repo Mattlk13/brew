@@ -68,7 +68,7 @@ module Homebrew
 
       output ||= comment_help(path)
 
-      if output
+      if output.present?
         if (tap = Tap.from_path(path)) && !tap.official?
           output = "From tap: #{tap.name}\n#{output}"
         end
