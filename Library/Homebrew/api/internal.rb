@@ -90,13 +90,13 @@ module Homebrew
       end
       private_class_method :download_and_cache_data!
 
-      sig { params(regenerate: T::Boolean, legacy_executables_fallback: T::Boolean).void }
-      def self.write_formula_names_and_aliases(regenerate: false, legacy_executables_fallback: false)
+      sig { params(regenerate: T::Boolean).void }
+      def self.write_formula_names_and_aliases(regenerate: false)
         download_and_cache_data! unless cache.key?("formula_hashes")
 
         Homebrew::API.write_names_file!(formula_hashes.keys, "formula", regenerate:)
         Homebrew::API.write_aliases_file!(formula_aliases, "formula", regenerate:)
-        Homebrew::API.write_executables_file!(formula_hashes, regenerate:, legacy_executables_fallback:)
+        Homebrew::API.write_executables_file!(formula_hashes, regenerate:)
       end
 
       sig { params(regenerate: T::Boolean).void }

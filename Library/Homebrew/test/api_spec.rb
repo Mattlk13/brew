@@ -146,6 +146,33 @@ RSpec.describe Homebrew::API do
     end
   end
 
+  describe "::write_executables_file!" do
+    it "handles the executables database being removed before comparison" do
+      cache_dir = mktmpdir
+      target = cache_dir/"internal/executables.txt"
+      target.dirname.mkpath
+      target.write "stale:stale-bin\n"
+      stub_const("Homebrew::API::HOMEBREW_CACHE_API", cache_dir)
+
+      removed = false
+      allow_any_instance_of(Pathname).to receive(:read).and_wrap_original do |method, *args|
+        if !removed && method.receiver == target
+          removed = true
+          target.unlink
+          raise Errno::ENOENT
+        end
+
+        method.call(*args)
+      end
+
+      expect(described_class.write_executables_file!(
+               { "foo" => { "executables" => ["foo-bin"] } },
+               regenerate: false,
+             )).to be true
+      expect(target.read).to eq("foo:foo-bin\n")
+    end
+  end
+
   describe "::tap_from_source_download" do
     let(:api_cache_root) { Homebrew::API::HOMEBREW_CACHE_API_SOURCE }
     let(:cache_path) do

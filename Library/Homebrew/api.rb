@@ -214,13 +214,13 @@ module Homebrew
       end
     end
 
-    sig { params(legacy_executables_fallback: T::Boolean).void }
-    def self.write_names_and_aliases(legacy_executables_fallback: false)
+    sig { void }
+    def self.write_names_and_aliases
       if Homebrew::EnvConfig.use_internal_api?
-        Homebrew::API::Internal.write_formula_names_and_aliases(legacy_executables_fallback:)
+        Homebrew::API::Internal.write_formula_names_and_aliases
         Homebrew::API::Internal.write_cask_names
       else
-        Homebrew::API::Formula.write_names_and_aliases(legacy_executables_fallback:)
+        Homebrew::API::Formula.write_names_and_aliases
         Homebrew::API::Cask.write_names
       end
     end
@@ -254,12 +254,11 @@ module Homebrew
 
     sig {
       params(
-        formulae:                    T::Hash[String, T::Hash[String, T.untyped]],
-        regenerate:                  T::Boolean,
-        legacy_executables_fallback: T::Boolean,
+        formulae:   T::Hash[String, T::Hash[String, T.untyped]],
+        regenerate: T::Boolean,
       ).returns(T::Boolean)
     }
-    def self.write_executables_file!(formulae, regenerate:, legacy_executables_fallback: false)
+    def self.write_executables_file!(formulae, regenerate:)
       executables_path = HOMEBREW_CACHE_API/"internal/executables.txt"
       executables_lines = formulae.filter_map do |name, hash|
         executables = T.cast(hash["executables"], T.nilable(T::Array[String]))
@@ -268,17 +267,22 @@ module Homebrew
         "#{name}:#{executables.join(" ")}"
       end
       if executables_lines.empty?
-        return false if executables_path.exist? && !executables_path.empty?
-        return false unless legacy_executables_fallback
-
-        # TODO: Remove this fallback once formula JSON always includes executables.
-        return download_executables_file_from_github_packages!(executables_path)
+        begin
+          executables_path.unlink
+          return true
+        rescue Errno::ENOENT
+          return false
+        end
       end
 
       contents = "#{executables_lines.sort.join("\n")}\n"
-      if !executables_path.exist? || regenerate || executables_path.read != contents
+      cached_contents = begin
+        executables_path.read unless regenerate
+      rescue Errno::ENOENT
+        nil
+      end
+      if regenerate || cached_contents != contents
         executables_path.dirname.mkpath
-        executables_path.unlink if executables_path.exist?
         executables_path.write(contents)
         return true
       end
