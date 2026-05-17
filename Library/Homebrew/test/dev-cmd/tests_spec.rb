@@ -13,33 +13,47 @@ RSpec.describe Homebrew::DevCmd::Tests do
     before do
       require "extend/os/linux/dev-cmd/tests"
       require "sandbox"
+
+      allow(GitHub::Actions).to receive(:env_set?).and_return(false)
     end
 
-    it "does not require the Linux sandbox outside GitHub Actions" do
+    it "does not require the Linux sandbox unless HOMEBREW_SANDBOX_LINUX is set" do
       allow(Sandbox).to receive(:available?).and_return(false)
       expect(Sandbox).not_to receive(:ensure_sandbox_installed!)
+      expect(Sandbox).not_to receive(:configure!)
 
-      with_env(CI: "1", GITHUB_ACTIONS: nil) do
+      with_env(HOMEBREW_SANDBOX_LINUX: nil) do
         expect { tests.send(:check_test_environment!) }.not_to raise_error
       end
     end
 
-    it "raises when the Linux sandbox is unavailable in GitHub Actions" do
-      allow(Sandbox).to receive(:available?).and_return(false)
-      expect(Sandbox).not_to receive(:ensure_sandbox_installed!)
+    it "raises when the requested Linux sandbox is unavailable" do
+      allow(Sandbox).to receive_messages(available?:     false,
+                                         failure_reason: "Bubblewrap is not working.")
+      expect(Sandbox).to receive(:ensure_sandbox_installed!).with(install_from_tests: true)
 
-      with_env(GITHUB_ACTIONS: "true") do
+      with_env(HOMEBREW_SANDBOX_LINUX: "1") do
         expect { tests.send(:check_test_environment!) }
-          .to raise_error(UsageError,
-                          "Invalid usage: GitHub Actions Linux tests require a working rootless Bubblewrap sandbox.")
+          .to raise_error(UsageError, "Invalid usage: Bubblewrap is not working.")
       end
     end
 
-    it "probes sandbox availability with Linux sandboxing enabled" do
-      allow(Sandbox).to receive(:available?) { ENV["HOMEBREW_SANDBOX_LINUX"] == "1" }
+    it "installs and probes sandbox availability when Linux sandboxing is enabled" do
+      allow(Sandbox).to receive(:available?).and_return(true)
+      expect(Sandbox).to receive(:ensure_sandbox_installed!).with(install_from_tests: true)
+
+      with_env(HOMEBREW_SANDBOX_LINUX: "1") do
+        expect { tests.send(:check_test_environment!) }.not_to raise_error
+      end
+    end
+
+    it "configures the sandbox on GitHub Actions when Linux sandboxing is enabled" do
+      allow(GitHub::Actions).to receive(:env_set?).and_return(true)
+      allow(Sandbox).to receive(:available?).and_return(true)
+      expect(Sandbox).to receive(:configure!)
       expect(Sandbox).not_to receive(:ensure_sandbox_installed!)
 
-      with_env(GITHUB_ACTIONS: "true", HOMEBREW_SANDBOX_LINUX: nil) do
+      with_env(HOMEBREW_SANDBOX_LINUX: "1") do
         expect { tests.send(:check_test_environment!) }.not_to raise_error
       end
     end

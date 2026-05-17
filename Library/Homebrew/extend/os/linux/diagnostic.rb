@@ -6,6 +6,7 @@ require "utils/shell"
 require "hardware"
 require "os/linux/glibc"
 require "os/linux/kernel"
+require "sandbox"
 
 module OS
   module Linux
@@ -23,6 +24,13 @@ module OS
             check_linuxbrew_core
             check_linuxbrew_bottle_domain
           ].freeze
+        end
+
+        sig { returns(T::Array[String]) }
+        def fatal_build_from_source_checks
+          (super + %w[
+            check_linux_sandbox
+          ]).freeze
         end
 
         sig { returns(T::Array[String]) }
@@ -161,6 +169,48 @@ module OS
 
             #{support_tier_message(tier: 3)}
           EOS
+        end
+
+        sig { returns(T.nilable(String)) }
+        def check_linux_sandbox
+          return unless Homebrew::EnvConfig.sandbox_linux?
+
+          state = ::Sandbox.state
+          return if [:disabled, :available].include?(state)
+
+          reason = ::Sandbox.failure_reason || "The Linux sandbox is not available."
+          lines = case state
+          when :missing
+            [
+              reason,
+              "",
+              "Install Bubblewrap and ensure a rootless `bwrap` executable is available on `PATH`.",
+            ]
+          when :setuid
+            [
+              reason,
+              "",
+              "Homebrew's Linux sandbox requires a rootless `bwrap` executable.",
+              "Install a non-setuid Bubblewrap or put it earlier on `PATH`.",
+            ]
+          when :unavailable
+            [
+              reason,
+              "",
+              "Homebrew's Linux sandbox requires rootless Bubblewrap and unprivileged",
+              "user namespaces. Check and update this system configuration:",
+              *::Sandbox.configuration_command_messages,
+            ]
+          else
+            [reason]
+          end
+
+          "#{[
+            *lines,
+            "",
+            "As a final workaround, disable the Linux sandbox:",
+            "  export HOMEBREW_NO_SANDBOX_LINUX=1",
+          ].join("\n")}\n"
         end
 
         sig { returns(T.nilable(String)) }

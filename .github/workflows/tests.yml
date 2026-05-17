@@ -263,8 +263,15 @@ jobs:
         if: matrix.name == 'tests (online)'
         uses: Homebrew/actions/cache-homebrew-prefix@main
         with:
-          install: subversion curl
+          install: bubblewrap curl subversion
           workflow-key: tests-tests-online
+
+      - name: Install brew tests Linux dependencies
+        if: matrix.name == 'tests (Linux)'
+        uses: Homebrew/actions/cache-homebrew-prefix@main
+        with:
+          install: bubblewrap
+          workflow-key: tests-tests-linux
 
       - name: Install brew tests macOS dependencies
         if: runner.os != 'Linux'
@@ -273,21 +280,6 @@ jobs:
           install: subversion gnupg
           workflow-key: tests-tests-macos
           uninstall: true
-
-      - name: Install brew tests Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap
-          # Allow unprivileged user namespace cloning; rootless `bwrap` needs this
-          # to create its user namespace.
-          sudo sysctl -w kernel.unprivileged_userns_clone=1
-          # Ensure the runner can allocate user namespaces instead of hitting a
-          # per-user namespace limit.
-          sudo sysctl -w user.max_user_namespaces=28633
-          # Ubuntu runners may additionally restrict unprivileged user namespaces
-          # through AppArmor; older kernels may not expose this sysctl.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
         # brew tests doesn't like world writable directories
       - name: Cleanup permissions

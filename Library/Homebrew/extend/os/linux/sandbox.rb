@@ -12,24 +12,55 @@ module OS
       requires_ancestor { ::Sandbox }
 
       BUBBLEWRAP = "bwrap"
+      BUBBLEWRAP_TEST_ARGS = T.let([
+        "--unshare-user",
+        "--unshare-ipc",
+        "--unshare-pid",
+        "--unshare-uts",
+        "--unshare-cgroup-try",
+        "--ro-bind", "/", "/",
+        "--proc", "/proc",
+        "--dev", "/dev",
+        "true"
+      ].freeze, T::Array[String])
       SYSTEM_BUBBLEWRAP_PATHS = T.let(%w[
         /usr/bin
         /bin
       ].freeze, T::Array[String])
+      class SysctlSetting < T::Struct
+        const :assignment, String
+        const :description, T::Array[String]
+        const :optional, T::Boolean, default: false
+      end
+      SANDBOX_SYSCTL_SETTINGS = T.let([
+        SysctlSetting.new(
+          assignment:  "kernel.unprivileged_userns_clone=1",
+          description: [
+            "Allows unprivileged processes to create user namespaces. Rootless",
+            "Bubblewrap needs this to isolate builds without elevated privileges.",
+          ],
+        ),
+        SysctlSetting.new(
+          assignment:  "user.max_user_namespaces=28633",
+          description: [
+            "Allows each user to allocate enough user namespaces. A zero or low",
+            "limit can prevent Bubblewrap from creating its sandbox.",
+          ],
+        ),
+        SysctlSetting.new(
+          assignment:  "kernel.apparmor_restrict_unprivileged_userns=0",
+          description: [
+            "Allows unprivileged user namespaces on AppArmor-enabled systems",
+            "that restrict them by default. Older kernels may not provide this",
+            "setting.",
+          ],
+          optional:    true,
+        ),
+      ].freeze, T::Array[SysctlSetting])
       # `TIOCSCTTY` from `<asm-generic/ioctls.h>`; Ruby does not expose it.
       TIOCSCTTY = 0x540E
-      READ_ONLY_PATHS = T.let(%w[
-        /bin
-        /etc
-        /lib
-        /lib64
-        /opt
-        /run
-        /sbin
-        /sys
-        /usr
-      ].freeze, T::Array[String])
-      private_constant :BUBBLEWRAP, :SYSTEM_BUBBLEWRAP_PATHS, :TIOCSCTTY, :READ_ONLY_PATHS
+      private_constant :BUBBLEWRAP, :BUBBLEWRAP_TEST_ARGS, :SYSTEM_BUBBLEWRAP_PATHS,
+                       :SysctlSetting, :SANDBOX_SYSCTL_SETTINGS, :TIOCSCTTY
 
       sig { returns(::PATH) }
       def self.bubblewrap_candidate_paths
@@ -70,6 +101,7 @@ module OS
 
       module ClassMethods
         extend T::Helpers
+        include Utils::Output::Mixin
 
         requires_ancestor { T.class_of(::Sandbox) }
 
@@ -108,51 +140,141 @@ module OS
           bubblewrap_executable || raise("Bubblewrap is required to use the Linux sandbox.")
         end
 
-        sig { void }
-        def ensure_sandbox_installed!
+        sig { params(install_from_tests: T::Boolean).void }
+        def ensure_sandbox_installed!(install_from_tests: false)
           return unless Homebrew::EnvConfig.sandbox_linux?
-          # Never trigger a real install during `brew tests`.
-          return if ENV["HOMEBREW_TESTS"]
+          return if ENV["HOMEBREW_TESTS"] && !install_from_tests
           return if ENV["HOMEBREW_INSTALLING_BUBBLEWRAP"]
           return if bubblewrap_executable
-
-          require "tap"
-          return unless ::CoreTap.instance.installed?
 
           require "exceptions"
           require "formula"
           with_env(HOMEBREW_INSTALLING_BUBBLEWRAP: "1") do
             ::Formula["bubblewrap"].ensure_installed!(reason: "Linux sandboxing")
           end
+          reset_state!
         rescue ::FormulaUnavailableError
           nil
         end
 
         sig { returns(T::Boolean) }
         def available?
-          return false unless Homebrew::EnvConfig.sandbox_linux?
-          return false unless (bubblewrap = executable)
+          state == :available
+        end
 
-          system(
-            bubblewrap.to_s,
-            "--unshare-user",
-            "--unshare-ipc",
-            "--unshare-pid",
-            "--unshare-uts",
-            "--unshare-cgroup-try",
-            "--ro-bind", "/", "/",
-            "--proc", "/proc",
-            "--dev", "/dev",
-            "true",
-            out: File::NULL,
-            err: File::NULL
-          ) == true
+        sig { returns(Symbol) }
+        def state
+          return :disabled unless Homebrew::EnvConfig.sandbox_linux?
+
+          @state ||= T.let(compute_state, T.nilable(Symbol))
+        end
+
+        sig { void }
+        def reset_state!
+          @state = T.let(nil, T.nilable(Symbol))
+        end
+
+        sig { returns(T::Array[String]) }
+        def configuration_commands
+          SANDBOX_SYSCTL_SETTINGS.map do |setting|
+            command = "sudo sysctl -w #{setting.assignment}"
+            command += " || true" if setting.optional
+            command
+          end
+        end
+
+        sig { returns(T::Array[String]) }
+        def configuration_command_messages
+          commands = configuration_commands
+          SANDBOX_SYSCTL_SETTINGS.each_with_index.flat_map do |setting, index|
+            [
+              "  #{commands.fetch(index)}",
+              *setting.description.map { |line| "    #{line}" },
+            ]
+          end
+        end
+
+        sig { void }
+        def configure!
+          unless bubblewrap_executable
+            ensure_sandbox_installed!(install_from_tests: true)
+            unless bubblewrap_executable
+              reset_state!
+              return
+            end
+          end
+
+          ohai "Configuring Bubblewrap..."
+          SANDBOX_SYSCTL_SETTINGS.each do |setting|
+            command = ["sudo", "sysctl", "-w", setting.assignment]
+            puts "  #{command.join(" ")}"
+            next if system(*command)
+            next if setting.optional
+
+            raise ErrorDuringExecution.new(command, status: $CHILD_STATUS)
+          end
+          reset_state!
+        end
+
+        sig { returns(T.nilable(String)) }
+        def failure_reason
+          case state
+          when :disabled, :available
+            nil
+          when :missing
+            "Bubblewrap is required to use the Linux sandbox but was not found."
+          when :setuid
+            "A rootless Bubblewrap executable is required to use the Linux sandbox, " \
+            "but all found `bwrap` executables are setuid."
+          when :unavailable
+            "Bubblewrap is installed but cannot create a rootless sandbox."
+          else
+            "The Linux sandbox is not available."
+          end
         end
 
         # `ioctl` request used to attach the sandboxed child to a controlling TTY.
         sig { returns(Integer) }
         def terminal_ioctl_request
           TIOCSCTTY
+        end
+
+        private
+
+        sig { returns(Symbol) }
+        def compute_state
+          bubblewraps = bubblewrap_executables
+          return :missing if bubblewraps.empty?
+
+          bubblewrap = bubblewraps.find { |candidate| executable_usable?(candidate) }
+          return :setuid if bubblewrap.nil?
+
+          return :available if bubblewrap_sandbox_available?(bubblewrap)
+
+          :unavailable
+        end
+
+        sig { returns(T::Array[::Pathname]) }
+        def bubblewrap_executables
+          executable_candidate_paths.filter_map do |path|
+            begin
+              candidate = ::Pathname.new(File.expand_path(executable_name, path))
+            rescue ArgumentError
+              next
+            end
+
+            candidate if candidate.file? && candidate.executable?
+          end
+        end
+
+        sig { params(bubblewrap: ::Pathname).returns(T::Boolean) }
+        def bubblewrap_sandbox_available?(bubblewrap)
+          system(
+            bubblewrap.to_s,
+            *BUBBLEWRAP_TEST_ARGS,
+            out: File::NULL,
+            err: File::NULL,
+          ) == true
         end
       end
 
@@ -189,31 +311,11 @@ module OS
           "--unshare-cgroup-try",
           "--die-with-parent",
           "--new-session",
+          "--ro-bind", "/", "/",
           "--dev", "/dev",
-          "--proc", "/proc",
-          "--dir", "/var"
+          "--proc", "/proc"
         ], T::Array[String])
         args << "--unshare-net" if deny_all_network?
-
-        ::Pathname.new(tmpdir).ascend.to_a.reverse_each do |path|
-          next if path.root?
-
-          args += ["--dir", path.to_s]
-        end
-
-        read_only_mounts = read_only_paths
-        read_only_parent_paths = read_only_mounts.flat_map do |path|
-          ::Pathname.new(path).ascend.to_a.reverse.filter_map do |parent|
-            parent.to_s if !parent.root? && parent.to_s != path
-          end
-        end.uniq
-        read_only_parent_paths.each do |path|
-          args += ["--dir", path]
-        end
-
-        read_only_mounts.each do |path|
-          args += ["--ro-bind", path, path]
-        end
 
         writable_paths.each do |path, type|
           prepare_writable_path(path, type)
@@ -236,26 +338,6 @@ module OS
         profile.rules.any? do |rule|
           !rule.allow && rule.operation == "network*" && rule.filter.nil?
         end
-      end
-
-      sig { returns(T::Array[String]) }
-      def read_only_paths
-        (READ_ONLY_PATHS + [HOMEBREW_PREFIX.to_s, HOMEBREW_REPOSITORY.to_s, HOMEBREW_LIBRARY_PATH.to_s] +
-          profile.rules.filter_map do |rule|
-            next if !rule.allow || !rule.operation.start_with?("file-read")
-            next unless (filter = rule.filter)
-
-            case filter.type
-            when :literal, :subpath
-              filter.path
-            when :regex
-              raise ArgumentError, "Linux sandbox does not support regex path filters: #{filter.path}"
-            else
-              raise ArgumentError, "Invalid path filter type: #{filter.type}"
-            end
-          end)
-          .select { |path| File.exist?(path) }
-          .uniq
       end
 
       sig { returns(T::Hash[String, Symbol]) }
