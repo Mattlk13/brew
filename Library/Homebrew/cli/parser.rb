@@ -178,7 +178,7 @@ module Homebrew
         @command_name = T.let(cmd.command_name, String)
         @is_dev_cmd = T.let(cmd.dev_cmd?, T::Boolean)
 
-        @constraints = T.let([], T::Array[[String, String]])
+        @constraints = T.let([], T::Array[[String, String, T.nilable(T::Array[String])]])
         @conflicts = T.let([], T::Array[T::Array[String]])
         @switch_sources = T.let({}, T::Hash[String, Symbol])
         @option_sources = T.let({}, T::Hash[String, Symbol])
@@ -260,7 +260,7 @@ module Homebrew
         end
 
         names.each do |name|
-          set_constraints(name, depends_on:)
+          set_constraints(name, depends_on:, subcommands:)
         end
 
         env_value = value_for_env(env)
@@ -359,7 +359,7 @@ module Homebrew
         end
 
         names.each do |name|
-          set_constraints(name, depends_on:)
+          set_constraints(name, depends_on:, subcommands:)
         end
       end
 
@@ -487,7 +487,7 @@ module Homebrew
             set_default_options
             validate_options
           end
-          check_constraint_violations
+          check_constraint_violations(named_args)
           check_named_args(named_args)
           check_subcommand_violations(named_args)
         end
@@ -786,18 +786,24 @@ module Homebrew
         Formatter.format_help_text(desc, width: Formatter::OPTION_DESC_WIDTH).split("\n")
       end
 
-      sig { params(name: String, depends_on: T.nilable(String)).returns(T.nilable(T::Array[[String, String]])) }
-      def set_constraints(name, depends_on:)
+      sig {
+        params(name: String, depends_on: T.nilable(String),
+               subcommands: T.nilable(T.any(String, T::Array[String]))).void
+      }
+      def set_constraints(name, depends_on:, subcommands:)
         return if depends_on.nil?
 
         primary = option_to_name(depends_on)
         secondary = option_to_name(name)
-        @constraints << [primary, secondary]
+        @constraints << [primary, secondary, effective_subcommands(subcommands)]
       end
 
-      sig { void }
-      def check_constraints
-        @constraints.each do |primary, secondary|
+      sig { params(args: T::Array[String]).void }
+      def check_constraints(args)
+        subcommand = subcommand_name(args)
+        @constraints.each do |primary, secondary, subcommands|
+          next if subcommands.present? && (subcommand.nil? || subcommands.exclude?(subcommand))
+
           primary_passed = option_passed?(primary)
           secondary_passed = option_passed?(secondary)
 
@@ -833,7 +839,7 @@ module Homebrew
       sig { void }
       def check_invalid_constraints
         @conflicts.each do |mutually_exclusive_options_group|
-          @constraints.each do |p, s|
+          @constraints.each do |p, s, _subcommands|
             next unless Set[p, s].subset?(Set[*mutually_exclusive_options_group])
 
             raise InvalidConstraintError.new(p, s)
@@ -841,11 +847,11 @@ module Homebrew
         end
       end
 
-      sig { void }
-      def check_constraint_violations
+      sig { params(args: T::Array[String]).void }
+      def check_constraint_violations(args)
         check_invalid_constraints
         check_conflicts
-        check_constraints
+        check_constraints(args)
       end
 
       sig { params(args: T::Array[String], type: ArgType, min: T.nilable(Integer), max: T.nilable(Integer)).void }

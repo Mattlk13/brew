@@ -7,8 +7,13 @@ require "cmd/shared_examples/args_parse"
 RSpec.describe Homebrew::Cmd::Bundle do
   it_behaves_like "parseable arguments"
 
-  it "uses install as the default subcommand" do
-    expect(described_class.new([]).args.subcommand).to eq("install")
+  it "handles default install subcommand options", :aggregate_failures do
+    with_env("HOMEBREW_BUNDLE_INSTALL_CLEANUP" => nil) do
+      expect(described_class.new([]).args.subcommand).to eq("install")
+      expect(described_class.new(%w[--cleanup --zap]).args.subcommand).to eq("install")
+      expect { described_class.new(%w[--zap]) }
+        .to raise_error(UsageError, /`--zap` cannot be passed without `--cleanup`/)
+    end
   end
 
   it "rejects install-only options for exec" do

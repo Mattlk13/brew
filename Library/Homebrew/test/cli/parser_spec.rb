@@ -648,6 +648,28 @@ RSpec.describe Homebrew::CLI::Parser do
         .to raise_error(UsageError, /`info` subcommand does not accept the `--force` switch/)
     end
 
+    it "applies option constraints only for the matching subcommand", :aggregate_failures do
+      parser = lambda do
+        described_class.new(Cmd) do
+          subcommand "install", default: true do
+            switch "--cleanup"
+            switch "--zap", depends_on: "--cleanup"
+            named_args :none
+          end
+
+          subcommand "cleanup" do
+            switch "--zap"
+            named_args :none
+          end
+        end
+      end
+
+      expect { parser.call.parse(["--zap"]) }
+        .to raise_error(Homebrew::CLI::OptionConstraintError, /`--zap` cannot be passed without `--cleanup`/)
+      expect(parser.call.parse(%w[--cleanup --zap]).subcommand).to eq("install")
+      expect(parser.call.parse(%w[cleanup --zap]).subcommand).to eq("cleanup")
+    end
+
     it "allows global options on all subcommands" do
       args = subcommand_parser.parse(%w[info foo --global])
 

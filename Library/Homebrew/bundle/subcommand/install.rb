@@ -46,6 +46,9 @@ module Homebrew
           switch "--cleanup",
                  description: "`install` performs cleanup operation, same as running `cleanup --force`.",
                  env:         [:bundle_install_cleanup, "--global"]
+          switch "--zap",
+                 description: "`cleanup` casks using the `zap` command instead of `uninstall`.",
+                 depends_on:  "--cleanup"
         end
 
         sig { override.void }
