@@ -1,35 +1,42 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "abstract_subcommand"
+
 require "services/cli"
-
 module Homebrew
-  module Services
-    module Commands
-      module Info
-        TRIGGERS = %w[info i].freeze
+  module Cmd
+    class Services < Homebrew::AbstractCommand
+      class InfoSubcommand < Homebrew::AbstractSubcommand
+        subcommand_args aliases: ["i"] do
+          usage_banner <<~EOS
+            [`sudo`] `brew services info` (<formula>|`--all`) [`--json`]:
+            List all managed services for the current user (or root).
+          EOS
+          named_args :service
+          switch "--all",
+                 description: "Run <subcommand> on all services."
+          switch "--json",
+                 description: "Output as JSON."
+        end
 
-        sig {
-          params(
-            targets: T::Array[Services::FormulaWrapper],
-            verbose: T::Boolean,
-            json:    T::Boolean,
-          ).void
-        }
-        def self.run(targets, verbose:, json:)
-          Services::Cli.check!(targets)
+        sig { override.void }
+        def run
+          Homebrew::Services::Cli.check!(targets)
 
           output = targets.map(&:to_hash)
 
-          if json
+          if args.json?
             puts JSON.pretty_generate(output)
             return
           end
 
           output.each do |hash|
-            puts output(hash, verbose:)
+            puts self.class.output(hash, verbose: args.verbose?)
           end
         end
+
+        TRIGGERS = %w[info i].freeze
 
         sig { params(bool: T.nilable(T.any(String, T::Boolean))).returns(String) }
         def self.pretty_bool(bool)
