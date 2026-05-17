@@ -3936,7 +3936,7 @@ subcommands with the `--cask` switch.
 
 `--appimagedir`
 
-: Target location for AppImages (default: \`\`).
+: Target location for AppImages (default: `~/Applications`).
 
 `--keyboard-layoutdir`
 

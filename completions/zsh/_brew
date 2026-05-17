@@ -1245,7 +1245,7 @@ _brew_instal() {
     '(--cask)--HEAD[If formula defines it, install the HEAD version, aka. main, trunk, unstable, master]' \
     '(--formula --force)--adopt[Adopt existing artifacts in the destination that are identical to those being installed. Cannot be combined with `--force`]' \
     '(--formula)--appdir[Target location for Applications (default: `/Applications`)]' \
-    '(--formula)--appimagedir[Target location for AppImages (default: ``)]' \
+    '(--formula)--appimagedir[Target location for AppImages (default: `~/Applications`)]' \
     '(--cask)--as-dependency[Install but mark as installed as a dependency and not installed on request]' \
     '--ask[Ask for confirmation before downloading and installing. Print a dependency plan, including added, changed and removed packages and dependencies, with download and install sizes of formula bottles. Enabled by default if `$HOMEBREW_ASK` is set]' \
     '(--formula)--audio-unit-plugindir[Target location for Audio Unit Plugins (default: `~/Library/Audio/Plug-Ins/Components`)]' \
@@ -1305,7 +1305,7 @@ _brew_install() {
     '(--cask)--HEAD[If formula defines it, install the HEAD version, aka. main, trunk, unstable, master]' \
     '(--formula --force)--adopt[Adopt existing artifacts in the destination that are identical to those being installed. Cannot be combined with `--force`]' \
     '(--formula)--appdir[Target location for Applications (default: `/Applications`)]' \
-    '(--formula)--appimagedir[Target location for AppImages (default: ``)]' \
+    '(--formula)--appimagedir[Target location for AppImages (default: `~/Applications`)]' \
     '(--cask)--as-dependency[Install but mark as installed as a dependency and not installed on request]' \
     '--ask[Ask for confirmation before downloading and installing. Print a dependency plan, including added, changed and removed packages and dependencies, with download and install sizes of formula bottles. Enabled by default if `$HOMEBREW_ASK` is set]' \
     '(--formula)--audio-unit-plugindir[Target location for Audio Unit Plugins (default: `~/Library/Audio/Plug-Ins/Components`)]' \
@@ -1818,7 +1818,7 @@ _brew_reinstall() {
   _arguments \
     '(--formula)--adopt[Adopt existing artifacts in the destination that are identical to those being installed. Cannot be combined with `--force`]' \
     '(--formula)--appdir[Target location for Applications (default: `/Applications`)]' \
-    '(--formula)--appimagedir[Target location for AppImages (default: ``)]' \
+    '(--formula)--appimagedir[Target location for AppImages (default: `~/Applications`)]' \
     '--ask[Ask for confirmation before downloading and reinstalling. Print a dependency plan, including added, changed and removed packages and dependencies, with download and install sizes of formula bottles. Enabled by default if `$HOMEBREW_ASK` is set]' \
     '(--formula)--audio-unit-plugindir[Target location for Audio Unit Plugins (default: `~/Library/Audio/Plug-Ins/Components`)]' \
     '(--formula)--binaries[Disable/enable linking of helper executables (default: enabled)]' \
@@ -2487,7 +2487,7 @@ _brew_update_test() {
 _brew_upgrade() {
   _arguments \
     '(--formula)--appdir[Target location for Applications (default: `/Applications`)]' \
-    '(--formula)--appimagedir[Target location for AppImages (default: ``)]' \
+    '(--formula)--appimagedir[Target location for AppImages (default: `~/Applications`)]' \
     '--ask[Ask for confirmation before downloading and upgrading. Print the same plan as `--dry-run`, including available download sizes. Enabled by default if `$HOMEBREW_ASK` is set]' \
     '(--formula)--audio-unit-plugindir[Target location for Audio Unit Plugins (default: `~/Library/Audio/Plug-Ins/Components`)]' \
     '(--formula)--binaries[Disable/enable linking of helper executables (default: enabled)]' \
