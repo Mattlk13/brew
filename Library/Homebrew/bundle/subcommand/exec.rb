@@ -1,17 +1,58 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "abstract_subcommand"
+
 require "English"
 require "exceptions"
 require "extend/ENV"
 require "utils"
 require "PATH"
 require "utils/output"
-
 module Homebrew
-  module Bundle
-    module Commands
-      module Exec
+  module Cmd
+    class Bundle < Homebrew::AbstractCommand
+      class ExecSubcommand < Homebrew::AbstractSubcommand
+        subcommand_args do
+          usage_banner <<~EOS
+            `brew bundle exec` [`--check`] [`--no-secrets`] <command>:
+            Run an external command in an isolated build environment based on the `Brewfile` dependencies.
+
+            This sanitized build environment ignores unrequested dependencies, which makes sure that things you didn't specify in your `Brewfile` won't get picked up by commands like `bundle install`, `npm install`, etc. It will also add compiler flags which will help with finding keg-only dependencies like `openssl`, `icu4c`, etc.
+          EOS
+          named_args :command
+          switch "--install",
+                 description: "Run `install` before continuing to other operations, e.g. `exec`."
+          switch "--services",
+                 description: "Temporarily start services while running the `exec` or `sh` command.",
+                 env:         :bundle_services
+          switch "--check",
+                 description: "Check that all dependencies in the Brewfile are installed before " \
+                              "running `exec`, `sh`, or `env`.",
+                 env:         :bundle_check
+          switch "--no-secrets",
+                 description: "Attempt to remove secrets from the environment before `exec`, `sh`, or `env`.",
+                 env:         :bundle_no_secrets
+        end
+
+        sig { override.void }
+        def run
+          self.class.run_command(*args.named, args:, context:)
+        end
+
+        sig { params(named_args: String, args: T.untyped, context: Homebrew::Cmd::Bundle::SubcommandContext).void }
+        def self.run_command(*named_args, args:, context:)
+          run_external_command(
+            *named_args,
+            global:     context.global,
+            file:       context.file,
+            subcommand: context.subcommand,
+            services:   args.services?,
+            check:      args.check?,
+            no_secrets: args.no_secrets?,
+          )
+        end
+
         extend Utils::Output::Mixin
 
         PATH_LIKE_ENV_REGEX = /.+#{File::PATH_SEPARATOR}/
@@ -27,7 +68,7 @@ module Homebrew
             no_secrets: T::Boolean,
           ).void
         }
-        def self.run(
+        def self.run_external_command(
           *args,
           global: false,
           file: nil,
@@ -37,8 +78,19 @@ module Homebrew
           no_secrets: false
         )
           if check
-            require "bundle/commands/check"
-            Homebrew::Bundle::Commands::Check.run(global:, file:, quiet: true)
+            require "bundle/subcommand/check"
+            CheckSubcommand.new(args, context: SubcommandContext.new(
+              subcommand:   "check",
+              global:,
+              file:,
+              no_upgrade:   false,
+              verbose:      false,
+              force:        false,
+              jobs:         1,
+              zap:          false,
+              no_type_args: true,
+              extensions:   Homebrew::Bundle.extensions,
+            ), quiet: true).run
           end
 
           # Store the old environment so we can check if things were already set
@@ -54,7 +106,7 @@ module Homebrew
 
           require "bundle/brewfile"
           @dsl ||= T.let(nil, T.nilable(Homebrew::Bundle::Dsl))
-          @dsl = Brewfile.read(global:, file:)
+          @dsl = Homebrew::Bundle::Brewfile.read(global:, file:)
 
           require "formula"
           require "formulary"
@@ -92,7 +144,7 @@ module Homebrew
           end
 
           # Setup pkgconf, if needed, to help locate packages
-          Bundle.prepend_pkgconf_path_if_needed!
+          Homebrew::Bundle.prepend_pkgconf_path_if_needed!
 
           # For commands which aren't either absolute or relative
           # Add the command directory to PATH, since it may get blown away by superenv
@@ -103,7 +155,7 @@ module Homebrew
           # Replace the formula versions from the environment variables
           ENV.deps.each do |formula|
             formula_name = formula.name
-            formula_version = Bundle.formula_versions_from_env(formula_name)
+            formula_version = Homebrew::Bundle.formula_versions_from_env(formula_name)
             next unless formula_version
 
             ENV.each do |key, value|
@@ -270,7 +322,7 @@ module Homebrew
           )
 
           entries_formulae.filter_map do |entry, formula|
-            service_file = Bundle::Brew::Services.versioned_service_file(entry.name)
+            service_file = Homebrew::Bundle::Brew::Services.versioned_service_file(entry.name)
 
             unless service_file&.file?
               prefix = formula.any_installed_prefix
@@ -308,19 +360,19 @@ module Homebrew
             loaded_file = Pathname.new(info["loaded_file"].to_s)
             next if info["running"] && loaded_file.file? && loaded_file.realpath == service_file.realpath
 
-            if info["running"] && !Bundle::Brew::Services.stop(info["name"], keep: true)
+            if info["running"] && !Homebrew::Bundle::Brew::Services.stop(info["name"], keep: true)
               opoo "Failed to stop #{info["name"]} service"
             end
 
             conflicting_services.each do |conflict|
-              if Bundle::Brew::Services.stop(conflict["name"], keep: true)
+              if Homebrew::Bundle::Brew::Services.stop(conflict["name"], keep: true)
                 services_to_restart << conflict["name"] if conflict["registered"]
               else
                 opoo "Failed to stop #{conflict["name"]} service"
               end
             end
 
-            unless Bundle::Brew::Services.run(info["name"], file: service_file)
+            unless Homebrew::Bundle::Brew::Services.run(info["name"], file: service_file)
               opoo "Failed to start #{info["name"]} service"
             end
 
@@ -336,7 +388,7 @@ module Homebrew
             stop_services(entries_to_stop)
 
             services_to_restart.each do |service|
-              next if Bundle::Brew::Services.run(service)
+              next if Homebrew::Bundle::Brew::Services.run(service)
 
               opoo "Failed to restart #{service} service"
             end
@@ -351,7 +403,7 @@ module Homebrew
             # Try avoid services not started by `brew bundle services`
             next if Homebrew::Services::System.launchctl? && info["registered"]
 
-            if info["running"] && !Bundle::Brew::Services.stop(info["name"], keep: true)
+            if info["running"] && !Homebrew::Bundle::Brew::Services.stop(info["name"], keep: true)
               opoo "Failed to stop #{info["name"]} service"
             end
           end

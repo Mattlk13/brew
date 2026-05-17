@@ -241,6 +241,7 @@ module Homebrew
                   return
                   ;;
         #{option_cases.chomp}
+                *) ;;
               esac
               ;;
             *) ;;

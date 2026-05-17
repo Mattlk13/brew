@@ -7,16 +7,23 @@ require "cmd/shared_examples/args_parse"
 RSpec.describe Homebrew::Cmd::Bundle do
   it_behaves_like "parseable arguments"
 
+  it "uses install as the default subcommand" do
+    expect(described_class.new([]).args.subcommand).to eq("install")
+  end
+
+  it "rejects install-only options for exec" do
+    expect { described_class.new(%w[exec --jobs=1 true]) }
+      .to raise_error(UsageError, /`exec` subcommand does not accept the `--jobs` flag/)
+  end
+
   [
     ["exec", ["exec", "--check", "/usr/bin/true"], "/usr/bin/true"],
     ["sh", ["sh", "--check"], "sh"],
     ["env", ["env", "--check"], "env"],
   ].each do |subcommand, args, command|
     it "passes --check through to #{subcommand}" do
-      require "bundle/commands/exec"
-
       with_env("HOMEBREW_BUNDLE_NO_SECRETS" => nil) do
-        expect(Homebrew::Bundle::Commands::Exec).to receive(:run)
+        expect(Homebrew::Cmd::Bundle::ExecSubcommand).to receive(:run_external_command)
           .with(
             command,
             global:     false,
@@ -33,10 +40,8 @@ RSpec.describe Homebrew::Cmd::Bundle do
   end
 
   it "passes HOMEBREW_BUNDLE_CHECK through to exec" do
-    require "bundle/commands/exec"
-
     with_env("HOMEBREW_BUNDLE_CHECK" => "1", "HOMEBREW_BUNDLE_NO_SECRETS" => nil) do
-      expect(Homebrew::Bundle::Commands::Exec).to receive(:run)
+      expect(Homebrew::Cmd::Bundle::ExecSubcommand).to receive(:run_external_command)
         .with(
           "/usr/bin/true",
           global:     false,

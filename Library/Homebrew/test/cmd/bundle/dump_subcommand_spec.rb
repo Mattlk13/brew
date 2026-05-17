@@ -2,17 +2,20 @@
 # frozen_string_literal: true
 
 require "bundle"
-require "bundle/commands/dump"
+require "bundle/subcommand/dump"
 
-RSpec.describe Homebrew::Bundle::Commands::Dump do
+RSpec.describe Homebrew::Cmd::Bundle::DumpSubcommand do
   subject(:dump) do
-    described_class.run(global:, file: nil, describe: false, force:, no_restart: false, taps: true, formulae: true,
-                        casks: true, extension_types: { mas: true, vscode: true, cargo: true, flatpak: false,
-                                                       go: true, uv: true })
+    described_class.new(args_object, context:).run
   end
 
   let(:force) { false }
   let(:global) { false }
+  let(:context) { bundle_subcommand_context(:dump, global:, force:, no_type_args: false) }
+  let(:args_object) do
+    args_for_subcommand(:dump, describe?: false, no_restart?: false, taps?: true, formulae?: true, casks?: true,
+                               mas?: true, vscode?: true, cargo?: true, flatpak?: false, go?: true, uv?: true)
+  end
 
   before do
     Homebrew::Bundle::Cask.reset!

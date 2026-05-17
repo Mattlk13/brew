@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 require "bundle"
-require "bundle/commands/list"
+require "bundle/subcommand/list"
 
 TYPES_AND_DEPS = {
   taps:     "phinze/cask",
@@ -22,26 +22,18 @@ COMBINATIONS = begin
   end.sort
 end.freeze
 
-RSpec.describe Homebrew::Bundle::Commands::List do
+RSpec.describe Homebrew::Cmd::Bundle::ListSubcommand do
   subject(:list) do
-    described_class.run(
-      global:          false,
-      file:            nil,
-      formulae:        formulae,
-      casks:           casks,
-      taps:            taps,
-      extension_types: {
-        mas:     mas,
-        vscode:  vscode,
-        cargo:   cargo,
-        flatpak: false,
-        go:      go,
-        uv:      uv,
-      },
-    )
+    described_class.new(args_object, context:).run
   end
 
-  let(:formulae) { true }
+  let(:context) { bundle_subcommand_context(:list, no_type_args:) }
+  let(:args_object) do
+    args_for_subcommand(:list, formulae?: formulae, casks?: casks, taps?: taps, mas?: mas, vscode?: vscode,
+                               cargo?: cargo, flatpak?: false, go?: go, uv?: uv, all?: false)
+  end
+  let(:no_type_args) { [formulae, casks, taps, mas, vscode, go, cargo, uv].none? }
+  let(:formulae) { false }
   let(:casks)    { false }
   let(:taps)     { false }
   let(:mas)      { false }
@@ -77,7 +69,11 @@ RSpec.describe Homebrew::Bundle::Commands::List do
     describe "limiting when certain options are passed" do
       COMBINATIONS.each do |options_list|
         opts_string = options_list.map { |o| "`#{o}`" }.join(" and ")
-        verb = (options_list.length == 1) ? "is" : "are"
+        verb = if options_list.length == 1
+          "is"
+        else
+          "are"
+        end
         words = options_list.join(" and ")
 
         context "when #{opts_string} #{verb} passed" do

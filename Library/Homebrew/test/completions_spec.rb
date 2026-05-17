@@ -373,6 +373,7 @@ RSpec.describe Homebrew::Completions do
         expect(completion).to include('info|i) subcommand="info"; break ;;')
         expect(completion).to include('__brewcomp "list ls info i start s"')
         expect(completion).to include("__brew_complete_services")
+        expect(completion).to include("        *) ;;\n      esac\n      ;;")
       end
     end
 

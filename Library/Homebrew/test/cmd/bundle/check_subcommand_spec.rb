@@ -2,14 +2,15 @@
 # frozen_string_literal: true
 
 require "bundle"
-require "bundle/commands/check"
+require "bundle/subcommand/check"
 require "bundle/dsl"
 require "bundle/skipper"
 
-RSpec.describe Homebrew::Bundle::Commands::Check, :no_api do
+RSpec.describe Homebrew::Cmd::Bundle::CheckSubcommand, :no_api do
   let(:do_check) do
-    described_class.run(no_upgrade:, verbose:)
+    described_class.new(args_for_subcommand(:check), context:).run
   end
+  let(:context) { bundle_subcommand_context(:check, no_upgrade:, verbose:) }
   let(:no_upgrade) { false }
   let(:verbose) { false }
 
