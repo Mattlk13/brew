@@ -115,14 +115,14 @@ RSpec.describe Homebrew::Cmd::Exec do
 
     it "runs commands in formula environments and supports the x alias", :aggregate_failures, :integration_test do
       expect do
-        expect(brew_sh("exec", "--skip-update", executable_name, "arg", brew_sh_env)).to be_a_success
+        expect(brew_sh("exec", executable_name, "arg", brew_sh_env)).to be_a_success
       end.to(
         output("active-version arg\n").to_stdout
           .and(output("").to_stderr),
       )
 
       expect do
-        expect(brew_sh("x", "--skip-update", executable_name, brew_sh_env)).to be_a_success
+        expect(brew_sh("x", executable_name, brew_sh_env)).to be_a_success
       end.to(
         output("active-version\n").to_stdout
           .and(output("").to_stderr),
@@ -137,14 +137,14 @@ RSpec.describe Homebrew::Cmd::Exec do
       )
 
       expect do
-        expect(brew_sh("exec", "--formulae", "--skip-update", executable_name, brew_sh_env)).to be_a_failure
+        expect(brew_sh("exec", "--formulae=", executable_name, brew_sh_env)).to be_a_failure
       end.to(
         output("").to_stdout
           .and(output("Error: `--formulae` requires a comma-separated formula list.\n").to_stderr),
       )
 
       expect do
-        expect(brew_sh("exec", "--skip-update", installable_executable_name, "arg",
+        expect(brew_sh("exec", installable_executable_name, "arg",
                        brew_sh_env)).to be_a_success
       end.to(
         output("installable-version arg\n").to_stdout

@@ -7,7 +7,7 @@ require "dev-cmd/generate-internal-api"
 RSpec.describe Homebrew::DevCmd::GenerateInternalApi do
   it_behaves_like "parseable arguments"
 
-  it "writes metadata to each generated packages file" do
+  it "writes metadata and formula executables to each generated packages file" do
     core_tap = instance_double(CoreTap, installed?: true, name: "homebrew/core", formula_names: ["foo"],
                                         alias_table: {}, formula_renames: {}, git_head: "formula-head",
                                         tap_migrations: {})
@@ -26,9 +26,18 @@ RSpec.describe Homebrew::DevCmd::GenerateInternalApi do
     allow(Cask::CaskLoader).to receive(:load).with(Pathname("c.rb")).and_return(
       instance_double(Cask::Cask, token: "c", to_hash_with_variations: { "token" => "c" }),
     )
+    allow(Homebrew::API).to receive(:download_executables_file_from_github_packages!) do |target|
+      target.write "foo(1.0.0):foo-tool food\n"
+      true
+    end
     allow(Homebrew::API::Formula::FormulaStructGenerator).to receive(:generate_formula_struct_hash)
-      .with({ "name" => "foo" }, bottle_tag:)
-      .and_return(instance_double(Homebrew::API::FormulaStruct, serialize: { "name" => "foo" }))
+      .with({ "name" => "foo", "executables" => ["foo-tool", "food"] }, bottle_tag:)
+      .and_return(
+        instance_double(
+          Homebrew::API::FormulaStruct,
+          serialize: { "name" => "foo", "executables" => ["foo-tool", "food"] },
+        ),
+      )
     allow(Homebrew::API::Cask::CaskStructGenerator).to receive(:generate_cask_struct_hash)
       .with({ "token" => "c" }, bottle_tag:)
       .and_return(instance_double(Homebrew::API::CaskStruct, serialize: { "token" => "c" }))
@@ -39,11 +48,13 @@ RSpec.describe Homebrew::DevCmd::GenerateInternalApi do
     mktmpdir do |path|
       path.cd { described_class.new([]).run }
 
-      expect(JSON.parse((path/"api/internal/packages.arm64_sonoma.json").read)["metadata"]).to eq({
+      json = JSON.parse((path/"api/internal/packages.arm64_sonoma.json").read)
+      expect(json["metadata"]).to eq({
         "homebrew_version" => "4.2.18",
         "bottle_tag"       => "arm64_sonoma",
         "generated_at"     => 1_714_056_000,
       })
+      expect(json.dig("formulae", "foo", "executables")).to eq(["foo-tool", "food"])
     end
   end
 end

@@ -8,6 +8,7 @@ RSpec.describe Homebrew::API::FormulaStruct do
     def build_formula_struct(checksums)
       Homebrew::API::FormulaStruct.new(
         desc:                 "sample formula",
+        executables:          ["sample"],
         homepage:             "https://example.com",
         license:              "MIT",
         ruby_source_checksum: "abc123",
@@ -136,6 +137,7 @@ RSpec.describe Homebrew::API::FormulaStruct do
       bottle_tag = Utils::Bottles::Tag.from_symbol(:arm64_sequoia)
       hash = {
         "desc"                 => "test formula",
+        "executables"          => ["foo"],
         "homepage"             => "https://example.com",
         "license"              => "MIT",
         "ruby_source_checksum" => "abc123",
@@ -149,6 +151,7 @@ RSpec.describe Homebrew::API::FormulaStruct do
 
       expect(struct.bottle?).to be(true)
       expect(struct.bottle_checksums).to eq([{ cellar: :any, arm64_sequoia: "checksum1" }])
+      expect(struct.executables).to eq(["foo"])
     end
 
     it "sets bottle_present to false when no bottle_checksum is present" do
@@ -267,6 +270,7 @@ RSpec.describe Homebrew::API::FormulaStruct do
         stable_present:         true,
         stable_url_args:        ["https://example.com/foo-1.0.tar.gz", {}],
         stable_dependencies:    ["dep1", { "dep2" => :build }],
+        executables:            ["foo"],
         stable_uses_from_macos: [["zlib", {}]],
         bottle_present:         true,
         bottle_checksums:       [{ cellar: :any, arm64_sequoia: "checksum1" }],

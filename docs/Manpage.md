@@ -650,7 +650,7 @@ working fine: please don't worry or file an issue; just ignore this.
 
 : Enable debugging and profiling of audit methods.
 
-### `exec`, `x` \[`--skip-update`\] \[`--formulae=`*`formulae`*\] \[`--`\] *`command`* \[*`args`* ...\]
+### `exec`, `x` \[`--formulae=`*`formulae`*\] \[`--`\] *`command`* \[*`args`* ...\]
 
 Run *`command`* in an environment populated by Homebrew formulae.
 
@@ -666,11 +666,6 @@ Example: `brew exec --formulae=jq,yq -- ./script.sh`
 
 Scripts can also use a shebang on systems with `env -S`: `#!/usr/bin/env -S brew
 exec --formulae=jq,yq --`
-
-`--skip-update`
-
-: Skip updating the executables database if any version exists on disk, no
-  matter how old.
 
 `--formulae`
 
@@ -1968,7 +1963,7 @@ Extract a specific *`version`* of *`formula`* into a personal tap and install
 it. The default tap is *`user`*/versions. *`user`* uses the GitHub username if
 available and the local username otherwise.
 
-### `which-formula` \[`--explain`\] \[`--skip-update`\] *`command`* \[...\]
+### `which-formula` \[`--explain`\] *`command`* \[...\]
 
 Show which formula(e) provides the given command.
 
@@ -1976,11 +1971,6 @@ Show which formula(e) provides the given command.
 
 : Output explanation of how to get *`command`* by installing one of the
   providing formulae.
-
-`--skip-update`
-
-: Skip updating the executables database if any version exists on disk, no
-  matter how old.
 
 ### `--cache` \[*`options`*\] \[*`formula`*\|*`cask`* ...\]
 

@@ -3,8 +3,6 @@
 
 require "cmd/shared_examples/args_parse"
 require "cmd/which-formula"
-require "open3"
-require "shellwords"
 
 RSpec.describe Homebrew::Cmd::WhichFormula do
   it_behaves_like "parseable arguments"
@@ -42,58 +40,22 @@ RSpec.describe Homebrew::Cmd::WhichFormula do
     end
 
     it "prints plain formula names when outputting to a non-TTY", :integration_test do
-      expect { brew_sh "which-formula", "--skip-update", "foo2", brew_sh_env }.to output("foo\n").to_stdout
+      expect { brew_sh "which-formula", "foo2", brew_sh_env }.to output("foo\n").to_stdout
       expect do
-        brew_sh "which-formula", "--skip-update", "foo2", brew_sh_env.merge("HOMEBREW_NO_EMOJI" => "1")
+        brew_sh "which-formula", "foo2", brew_sh_env.merge("HOMEBREW_NO_EMOJI" => "1")
       end.to output("foo\n").to_stdout
-      expect { brew_sh "which-formula", "--skip-update", "baz", brew_sh_env }.to output("baz\n").to_stdout
-      expect { brew_sh "which-formula", "--skip-update", "bar" }.not_to output.to_stdout
-      expect { brew_sh "which-formula", "--skip-update", "QUX", brew_sh_env }.to output("qux\n").to_stdout
-      expect { brew_sh "which-formula", "--skip-update", "quux", brew_sh_env }.to output("quux\n").to_stdout
+      expect { brew_sh "which-formula", "baz", brew_sh_env }.to output("baz\n").to_stdout
+      expect { brew_sh "which-formula", "bar" }.not_to output.to_stdout
+      expect { brew_sh "which-formula", "QUX", brew_sh_env }.to output("qux\n").to_stdout
+      expect { brew_sh "which-formula", "quux", brew_sh_env }.to output("quux\n").to_stdout
     end
 
-    it "announces executable database downloads" do
-      mktmpdir do |path|
-        database = path/"api/internal/executables.txt"
-        repository = path/"repository"
-        fake_curl = path/"curl"
-        fake_curl.write <<~SH
-          #!/bin/sh
-          while [ "$#" -gt 0 ]; do
-            if [ "$1" = "--output" ]; then
-              output="$2"
-              shift 2
-            else
-              shift
-            fi
-          done
-          mkdir -p "$(dirname "$output")"
-          printf 'downloaded-formula(1.0):downloaded\\n' > "$output"
-        SH
-        fake_curl.chmod 0755
-        (repository/".git").mkpath
+    it "errors if the API is disabled and the executable database is missing", :integration_test do
+      described_class::DATABASE_FILE.unlink
 
-        stdout, stderr, status = Open3.capture3(
-          {
-            "HOMEBREW_API_DEFAULT_DOMAIN" => "https://example.com",
-            "HOMEBREW_CACHE"              => path.to_s,
-            "HOMEBREW_COLOR"              => nil,
-            "HOMEBREW_CURL"               => fake_curl.to_s,
-            "HOMEBREW_CURL_SPEED_LIMIT"   => "100",
-            "HOMEBREW_CURL_SPEED_TIME"    => "1",
-            "HOMEBREW_LIBRARY"            => HOMEBREW_LIBRARY_PATH.parent.to_s,
-            "HOMEBREW_REPOSITORY"         => repository.to_s,
-            "HOMEBREW_USER_AGENT_CURL"    => "Homebrew tests",
-          },
-          "/bin/bash",
-          "-c",
-          "source #{Shellwords.escape((HOMEBREW_LIBRARY_PATH/"cmd/which-formula.sh").to_s)}; " \
-          "download_and_cache_executables_file",
-        )
-
-        expect([status.success?, stdout, stderr, database.read])
-          .to eq([true, "==> Downloading executables.txt\n", "", "downloaded-formula(1.0):downloaded\n"])
-      end
+      expect do
+        expect(brew_sh("which-formula", "foo2", "HOMEBREW_NO_INSTALL_FROM_API" => "1")).to be_a_failure
+      end.to output(/HOMEBREW_NO_INSTALL_FROM_API must be unset/).to_stderr
     end
   end
 end

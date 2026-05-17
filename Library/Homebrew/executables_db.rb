@@ -33,6 +33,11 @@ module Homebrew
       end
     end
 
+    sig { returns(T::Hash[String, T::Array[String]]) }
+    def to_hash
+      @exes.transform_values(&:dup)
+    end
+
     sig { params(bottle_json_dir: T.nilable(String), removed_formulae: T::Array[String]).void }
     def update!(bottle_json_dir: nil, removed_formulae: [])
       if (json_dir = bottle_json_dir.presence) && Pathname(json_dir).directory?

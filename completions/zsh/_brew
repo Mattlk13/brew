@@ -1022,7 +1022,6 @@ _brew_exec() {
     '--formulae[Comma-separated formulae to install and add to `PATH` before running command]' \
     '--help[Show this message]' \
     '--quiet[Make some output more quiet]' \
-    '--skip-update[Skip updating the executables database if any version exists on disk, no matter how old]' \
     '--verbose[Make some output more verbose]'
 }
 
@@ -2602,7 +2601,6 @@ _brew_which_formula() {
     '--explain[Output explanation of how to get command by installing one of the providing formulae]' \
     '--help[Show this message]' \
     '--quiet[Make some output more quiet]' \
-    '--skip-update[Skip updating the executables database if any version exists on disk, no matter how old]' \
     '--verbose[Make some output more verbose]' \
     - command \
     '*:command:__brew_commands'
@@ -2629,7 +2627,6 @@ _brew_x() {
     '--formulae[Comma-separated formulae to install and add to `PATH` before running command]' \
     '--help[Show this message]' \
     '--quiet[Make some output more quiet]' \
-    '--skip-update[Skip updating the executables database if any version exists on disk, no matter how old]' \
     '--verbose[Make some output more verbose]'
 }
 
