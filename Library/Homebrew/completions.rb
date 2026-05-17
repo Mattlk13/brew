@@ -379,6 +379,15 @@ module Homebrew
 
     sig { params(command: String, subcommands: T::Array[Homebrew::CLI::Parser::Subcommand]).returns(String) }
     def self.generate_zsh_nested_subcommand_completion(command, subcommands)
+      default_subcommand = subcommands.find(&:default)&.name
+      top_level_arguments = generate_zsh_arguments(
+        command,
+        command_options(command, subcommand: default_subcommand),
+        nil,
+      ).map { |opt| format_zsh_argument(opt) } + [
+        "'1:subcommand:->subcommand'",
+        "'*::arg:->args'",
+      ]
       subcommand_descriptions = subcommands.flat_map do |subcommand|
         description = subcommand.description
         ([subcommand.name] + subcommand.aliases).map do |subcommand_name|
@@ -415,8 +424,7 @@ module Homebrew
           )
 
           _arguments -C \\
-            '1:subcommand:->subcommand' \\
-            '*::arg:->args'
+            #{top_level_arguments.join(" \\\n    ")}
 
           case "$state" in
             subcommand)

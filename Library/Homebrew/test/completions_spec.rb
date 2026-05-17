@@ -446,6 +446,8 @@ RSpec.describe Homebrew::Completions do
         completion = described_class.generate_zsh_subcommand_completion(nested_completion_command)
 
         expect(completion).to include("'1:subcommand:->subcommand'")
+        expect(completion).to include("  _arguments -C \\\n    '--all[Run subcommand on all services]' \\\n    " \
+                                      "'1:subcommand:->subcommand'")
         expect(completion).to include("'i:Show service information'")
         expect(completion).to include("info|i)")
         expect(completion).to include("*:service:__brew_services")
