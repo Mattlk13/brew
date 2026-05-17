@@ -1,0 +1,101 @@
+# typed: strict
+# frozen_string_literal: true
+
+require "abstract_subcommand"
+require "bundle/extensions/extension"
+require "cli/parser"
+require "etc"
+require "bundle/subcommand_context"
+require "utils/output"
+
+Dir["#{__dir__}/subcommand/*.rb"].each do |subcommand|
+  require "bundle/subcommand/#{File.basename(subcommand, ".rb")}"
+end
+
+module Homebrew
+  module Cmd
+    class Bundle < Homebrew::AbstractCommand
+      extend Utils::Output::Mixin
+
+      class << self
+        sig {
+          params(
+            args:       T.untyped,
+            extensions: T::Array[T.class_of(Homebrew::Bundle::Extension)],
+          ).void
+        }
+        def dispatch(args, extensions:)
+          # Don't want to ask for input in Bundle
+          ENV["HOMEBREW_ASK"] = nil
+
+          if !args.describe? && (dump_describe = ENV["HOMEBREW_BUNDLE_DUMP_DESCRIBE"].presence)
+            opoo "`HOMEBREW_BUNDLE_DUMP_DESCRIBE` is deprecated. Use `HOMEBREW_BUNDLE_DESCRIBE` instead."
+            # odeprecated "HOMEBREW_BUNDLE_DUMP_DESCRIBE", "HOMEBREW_BUNDLE_DESCRIBE"
+            ENV["HOMEBREW_BUNDLE_DESCRIBE"] = dump_describe
+          end
+
+          context = context(args, extensions:)
+          Homebrew::Bundle.upgrade_formulae = args.upgrade_formulae
+
+          if args.install?
+            redirect_stdout($stderr) do
+              InstallSubcommand.new(args, context:, quiet: true, cleanup: false).run
+            end
+          end
+
+          subcommand_class = Homebrew::AbstractSubcommand.subcommands_for(Homebrew::Cmd::Bundle).find do |candidate|
+            candidate.subcommand_name == context.subcommand
+          end
+          raise UsageError, "Unknown subcommand: #{context.subcommand}" unless subcommand_class
+
+          subcommand_class.new(args, context:).run
+        end
+
+        sig {
+          params(
+            args:       T.untyped,
+            extensions: T::Array[T.class_of(Homebrew::Bundle::Extension)],
+          ).returns(SubcommandContext)
+        }
+        def context(args, extensions:)
+          subcommand = T.let(args.subcommand || "install", String)
+          jobs_arg = args.jobs || ENV.fetch("HOMEBREW_BUNDLE_JOBS", nil)
+          jobs = if jobs_arg == "auto"
+            [Etc.nprocessors, 4].min
+          else
+            jobs_arg&.to_i || 1
+          end
+          no_upgrade = if args.upgrade? || subcommand == "upgrade"
+            false
+          else
+            args.no_upgrade?.present?
+          end
+
+          SubcommandContext.new(
+            subcommand:,
+            global:       args.global?,
+            file:         args.file,
+            no_upgrade:,
+            verbose:      args.verbose?,
+            force:        args.force?,
+            jobs:         [jobs, 1].max,
+            zap:          args.zap?,
+            no_type_args: no_type_args?(args, extensions:),
+            extensions:,
+          )
+        end
+
+        sig {
+          params(
+            args:       T.untyped,
+            extensions: T::Array[T.class_of(Homebrew::Bundle::Extension)],
+          ).returns(T::Boolean)
+        }
+        def no_type_args?(args, extensions:)
+          ([args.formulae?, args.casks?, args.taps?] +
+            extensions.map { |extension| args.public_send(extension.predicate_method) }).none?
+        end
+      end
+    end
+  end
+end

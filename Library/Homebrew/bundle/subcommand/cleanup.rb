@@ -1,16 +1,66 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "abstract_subcommand"
+require "bundle/extensions/extension"
+
 require "utils/formatter"
 require "utils"
 require "bundle/dsl"
 require "bundle/extensions"
-
 module Homebrew
-  module Bundle
-    module Commands
-      # Uninstalls formulae, casks, taps, VSCode extensions and Flatpak packages not listed in the Brewfile.
-      module Cleanup
+  module Cmd
+    class Bundle < Homebrew::AbstractCommand
+      class CleanupSubcommand < Homebrew::AbstractSubcommand
+        subcommand_args do
+          usage_banner <<~EOS
+            `brew bundle cleanup`:
+            Uninstall all dependencies not present in the `Brewfile`.
+
+            This workflow is useful for maintainers or testers who regularly install lots of formulae.
+
+            Unless `--force` is passed, this returns a 1 exit code if anything would be removed.
+          EOS
+          named_args :none
+          switch "--install",
+                 description: "Run `install` before continuing to other operations, e.g. `exec`."
+          switch "-f", "--force",
+                 description: "`install` runs with `--force`/`--overwrite`. " \
+                              "`dump` overwrites an existing `Brewfile`. " \
+                              "`cleanup` actually performs its cleanup operations."
+          switch "--formula", "--formulae", "--brews",
+                 description: "`list`, `dump` or `cleanup` Homebrew formula dependencies."
+          switch "--cask", "--casks",
+                 description: "`list`, `dump` or `cleanup` Homebrew cask dependencies."
+          switch "--tap", "--taps",
+                 description: "`list`, `dump` or `cleanup` Homebrew tap dependencies."
+          Homebrew::Bundle.extensions.select(&:cleanup_supported?).each do |extension|
+            switch "--#{extension.flag}",
+                   description: extension.switch_description
+          end
+          switch "--zap",
+                 description: "`cleanup` casks using the `zap` command instead of `uninstall`."
+        end
+
+        sig { override.void }
+        def run
+          self.class.cleanup(
+            global:          context.global,
+            file:            context.file,
+            force:           context.force,
+            zap:             context.zap,
+            formulae:        args.formulae? || context.no_type_args,
+            casks:           args.casks? || context.no_type_args,
+            taps:            args.taps? || context.no_type_args,
+            extension_types: context.extensions.select(&:cleanup_supported?).to_h do |extension|
+              [
+                extension.type,
+                context.extension_selected?(args, extension) || context.no_type_args,
+              ]
+            end,
+          )
+        end
+
         sig { void }
         def self.reset!
           require "bundle/cask"
@@ -33,16 +83,28 @@ module Homebrew
                  dsl: T.nilable(Homebrew::Bundle::Dsl), formulae: T::Boolean, casks: T::Boolean, taps: T::Boolean,
                  extension_types: Homebrew::Bundle::ExtensionTypes).void
         }
-        def self.run(global: false, file: nil, force: false, zap: false, dsl: nil,
-                     formulae: true, casks: true, taps: true, extension_types: {})
+        def self.cleanup(global: false, file: nil, force: false, zap: false, dsl: nil,
+                         formulae: true, casks: true, taps: true, extension_types: {})
           read_dsl_from_brewfile!(global:, file:, dsl:)
 
           extension_types = Homebrew::Bundle.extensions.select(&:cleanup_supported?).to_h do |extension|
             [extension.type, true]
           end.merge(extension_types)
-          casks = casks ? casks_to_uninstall(global:, file:) : []
-          formulae = formulae ? formulae_to_uninstall(global:, file:) : []
-          taps = taps ? taps_to_untap(global:, file:) : []
+          casks = if casks
+            casks_to_uninstall(global:, file:)
+          else
+            []
+          end
+          formulae = if formulae
+            formulae_to_uninstall(global:, file:)
+          else
+            []
+          end
+          taps = if taps
+            taps_to_untap(global:, file:)
+          else
+            []
+          end
           cleanup_extensions = Homebrew::Bundle.extensions.select(&:cleanup_supported?).filter_map do |extension|
             next unless extension_types.fetch(extension.type, false)
             raise ArgumentError, "dsl is unset!" unless @dsl
@@ -51,7 +113,11 @@ module Homebrew
           end
           if force
             if casks.any?
-              args = zap ? ["--zap"] : []
+              args = if zap
+                ["--zap"]
+              else
+                []
+              end
               Kernel.system HOMEBREW_BREW_FILE, "uninstall", "--cask", *args, "--force", *casks
               puts "Uninstalled #{casks.size} cask#{"s" if casks.size != 1}"
             end
@@ -124,7 +190,7 @@ module Homebrew
               dsl
             else
               require "bundle/brewfile"
-              Brewfile.read(global:, file:)
+              Homebrew::Bundle::Brewfile.read(global:, file:)
             end,
             T.nilable(Homebrew::Bundle::Dsl),
           )
@@ -132,7 +198,7 @@ module Homebrew
 
         sig { returns(T.nilable(Homebrew::Bundle::Dsl)) }
         def self.dsl
-          @dsl
+          T.let(@dsl, T.nilable(Homebrew::Bundle::Dsl))
         end
 
         sig { params(global: T::Boolean, file: T.nilable(String)).returns(T::Array[String]) }

@@ -669,47 +669,231 @@ _brew_bump_unversioned_casks() {
 
 # brew bundle
 _brew_bundle() {
-  _arguments \
-    '(--no-vscode --no-go --no-cargo --no-uv --no-flatpak --no-krew --no-npm)--all[`list` all dependencies]' \
-    '(--no-cargo)--cargo[`list`, `dump` or `cleanup` Cargo packages]' \
-    '--cask[`list`, `dump` or `cleanup` Homebrew cask dependencies]' \
-    '--check[Check that all dependencies in the Brewfile are installed before running `exec`, `sh`, or `env`. Enabled by default if `$HOMEBREW_BUNDLE_CHECK` is set]' \
-    '--cleanup[`install` performs cleanup operation, same as running `cleanup --force`. Enabled by default if `$HOMEBREW_BUNDLE_INSTALL_CLEANUP` is set and `--global` is passed]' \
-    '--debug[Display any debugging information]' \
-    '--describe[`dump` and `add` add a description comment above each line, unless the dependency does not have a description. Enabled by default if `$HOMEBREW_BUNDLE_DESCRIBE` is set]' \
-    '(--global)--file[Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout]' \
-    '(--no-flatpak)--flatpak[`list`, `dump` or `cleanup` Flatpak packages. Note: Linux only]' \
-    '--force[`install` runs with `--force`/`--overwrite`. `dump` overwrites an existing `Brewfile`. `cleanup` actually performs its cleanup operations]' \
-    '--formula[`list`, `dump` or `cleanup` Homebrew formula dependencies]' \
-    '(--file)--global[Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise]' \
-    '(--no-go)--go[`list`, `dump` or `cleanup` Go packages]' \
-    '--help[Show this message]' \
-    '(--upgrade)--install[Run `install` before continuing to other operations, e.g. `exec`]' \
-    '--jobs[`install` runs up to this many formula installations in parallel. Defaults to 1 (sequential). Use `auto` for the number of CPU cores (max 4)]' \
-    '(--no-krew)--krew[`list` or `dump` Krew plugins]' \
-    '--mas[`list` or `dump` Mac App Store dependencies]' \
-    '(--all --cargo)--no-cargo[`dump` without Cargo packages. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_CARGO` is set]' \
-    '(--all --flatpak)--no-flatpak[`dump` without Flatpak packages. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_FLATPAK` is set]' \
-    '(--all --go)--no-go[`dump` without Go packages. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_GO` is set]' \
-    '(--all --krew)--no-krew[`dump` without Krew plugins. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_KREW` is set]' \
-    '(--all --npm)--no-npm[`dump` without npm packages. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_NPM` is set]' \
-    '--no-restart[`dump` does not add `restart_service` to formula lines]' \
-    '--no-secrets[Attempt to remove secrets from the environment before `exec`, `sh`, or `env`. Enabled by default if `$HOMEBREW_BUNDLE_NO_SECRETS` is set]' \
-    '--no-upgrade[`install` does not run `brew upgrade` on outdated dependencies. `check` does not check for outdated dependencies. Note they may still be upgraded by `brew install` if needed. Enabled by default if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set]' \
-    '(--all --uv)--no-uv[`dump` without uv tools. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_UV` is set]' \
-    '(--all --vscode)--no-vscode[`dump` without VSCode (and forks/variants) extensions. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_VSCODE` is set]' \
-    '(--no-npm)--npm[`list`, `dump` or `cleanup` npm packages]' \
-    '--quiet[Make some output more quiet]' \
-    '--services[Temporarily start services while running the `exec` or `sh` command. Enabled by default if `$HOMEBREW_BUNDLE_SERVICES` is set]' \
-    '--tap[`list`, `dump` or `cleanup` Homebrew tap dependencies]' \
-    '(--install)--upgrade[`install` runs `brew upgrade` on outdated dependencies, even if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set]' \
-    '--upgrade-formulae[`install` runs `brew upgrade` on any of these comma-separated formulae, even if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set]' \
-    '(--no-uv)--uv[`list`, `dump` or `cleanup` uv tools]' \
-    '--verbose[`install` prints output from commands as they are run. `check` lists all missing dependencies]' \
-    '(--no-vscode)--vscode[`list`, `dump` or `cleanup` VSCode (and forks/variants) extensions]' \
-    '--zap[`cleanup` casks using the `zap` command instead of `uninstall`]' \
-    - subcommand \
-    '*:subcommand:(install dump cleanup check exec list sh env edit)'
+  local state
+  local -a subcommands
+  subcommands=(
+    'upgrade:Shorthand for `brew bundle install --upgrade`'
+    'sh:Run your shell in a `brew bundle exec` environment'
+    'remove:Remove entries that match `name` from your `Brewfile`. Use `--formula`, `--cask`, `--tap`, `--mas`, `--vscode`, `--go`, `--cargo`, `--uv`, `--flatpak`, `--krew` and `--npm` to remove only entries of the corresponding type. Passing `--formula` also removes matches against formula aliases and old formula names'
+    'list:By default, only Homebrew formula dependencies are listed'
+    'install:Use this to restore a recorded installed state from a `Brewfile`'
+    'exec:This sanitized build environment ignores unrequested dependencies, which makes sure that things you didn'\''t specify in your `Brewfile` won'\''t get picked up by commands like `bundle install`, `npm install`, etc. It will also add compiler flags which will help with finding keg-only dependencies like `openssl`, `icu4c`, etc'
+    'env:Print the environment variables that would be set in a `brew bundle exec` environment'
+    'edit:Edit the `Brewfile` in your editor'
+    'dump:Write all installed casks/formulae/images/taps into a `Brewfile` in the current directory or to a custom file specified with the `--file` option. This is useful as an installed-state snapshot and can be kept in version control and diffed'
+    'cleanup:This workflow is useful for maintainers or testers who regularly install lots of formulae'
+    'check:This provides a successful exit code if everything is up-to-date, making it useful for scripting. Use `--verbose` to list unmet dependencies'
+    'add:Add entries to your `Brewfile`. Adds formulae by default. Use `--cask`, `--tap`, `--vscode`, `--go`, `--cargo`, `--uv`, `--flatpak`, `--krew` and `--npm` to add the corresponding entry instead'
+  )
+
+  _arguments -C \
+    '1:subcommand:->subcommand' \
+    '*::arg:->args'
+
+  case "$state" in
+    subcommand)
+      _describe -t subcommands 'subcommand' subcommands
+      ;;
+    args)
+      case "$words[2]" in
+upgrade)
+        _arguments \
+          '--debug[Display any debugging information]' \
+          '(--global)--file[Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout]' \
+          '(--file)--global[Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise]' \
+          '--help[Show this message]' \
+          '--jobs[`install` runs up to this many formula installations in parallel. Defaults to 1 (sequential). Use `auto` for the number of CPU cores (max 4)]' \
+          '--quiet[Make some output more quiet]' \
+          '--upgrade[`install` runs `brew upgrade` on outdated dependencies, even if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set]' \
+          '--upgrade-formulae[`install` runs `brew upgrade` on any of these comma-separated formulae, even if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set]'
+        ;;
+sh)
+        _arguments \
+          '--check[Check that all dependencies in the Brewfile are installed before running `exec`, `sh`, or `env`. Enabled by default if `$HOMEBREW_BUNDLE_CHECK` is set]' \
+          '--debug[Display any debugging information]' \
+          '(--global)--file[Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout]' \
+          '(--file)--global[Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise]' \
+          '--help[Show this message]' \
+          '--install[Run `install` before continuing to other operations, e.g. `exec`]' \
+          '--no-secrets[Attempt to remove secrets from the environment before `exec`, `sh`, or `env`. Enabled by default if `$HOMEBREW_BUNDLE_NO_SECRETS` is set]' \
+          '--quiet[Make some output more quiet]' \
+          '--services[Temporarily start services while running the `exec` or `sh` command. Enabled by default if `$HOMEBREW_BUNDLE_SERVICES` is set]'
+        ;;
+remove)
+        _arguments \
+          '(--no-cargo)--cargo[`list`, `dump` or `cleanup` Cargo packages]' \
+          '--cask[Add Homebrew cask entries]' \
+          '--debug[Display any debugging information]' \
+          '(--global)--file[Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout]' \
+          '(--no-flatpak)--flatpak[`list`, `dump` or `cleanup` Flatpak packages. Note: Linux only]' \
+          '--formula[Add Homebrew formula entries]' \
+          '(--file)--global[Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise]' \
+          '(--no-go)--go[`list`, `dump` or `cleanup` Go packages]' \
+          '--help[Show this message]' \
+          '--install[Run `install` before continuing to other operations, e.g. `exec`]' \
+          '(--no-krew)--krew[`list` or `dump` Krew plugins]' \
+          '--mas[`list` or `dump` Mac App Store dependencies]' \
+          '(--no-npm)--npm[`list`, `dump` or `cleanup` npm packages]' \
+          '--quiet[Make some output more quiet]' \
+          '--tap[Add Homebrew tap entries]' \
+          '(--no-uv)--uv[`list`, `dump` or `cleanup` uv tools]' \
+          '(--no-vscode)--vscode[`list`, `dump` or `cleanup` VSCode (and forks/variants) extensions]'
+        ;;
+list)
+        _arguments \
+          '--all[`list` all dependencies]' \
+          '(--no-cargo)--cargo[`list`, `dump` or `cleanup` Cargo packages]' \
+          '--cask[Add Homebrew cask entries]' \
+          '--debug[Display any debugging information]' \
+          '(--global)--file[Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout]' \
+          '(--no-flatpak)--flatpak[`list`, `dump` or `cleanup` Flatpak packages. Note: Linux only]' \
+          '--formula[Add Homebrew formula entries]' \
+          '(--file)--global[Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise]' \
+          '(--no-go)--go[`list`, `dump` or `cleanup` Go packages]' \
+          '--help[Show this message]' \
+          '--install[Run `install` before continuing to other operations, e.g. `exec`]' \
+          '(--no-krew)--krew[`list` or `dump` Krew plugins]' \
+          '--mas[`list` or `dump` Mac App Store dependencies]' \
+          '(--no-npm)--npm[`list`, `dump` or `cleanup` npm packages]' \
+          '--quiet[Make some output more quiet]' \
+          '--tap[Add Homebrew tap entries]' \
+          '(--no-uv)--uv[`list`, `dump` or `cleanup` uv tools]' \
+          '(--no-vscode)--vscode[`list`, `dump` or `cleanup` VSCode (and forks/variants) extensions]'
+        ;;
+install)
+        _arguments \
+          '--cleanup[`install` performs cleanup operation, same as running `cleanup --force`. Enabled by default if `$HOMEBREW_BUNDLE_INSTALL_CLEANUP` is set and `--global` is passed]' \
+          '--debug[Display any debugging information]' \
+          '(--global)--file[Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout]' \
+          '--force[`install` runs with `--force`/`--overwrite`. `dump` overwrites an existing `Brewfile`. `cleanup` actually performs its cleanup operations]' \
+          '(--file)--global[Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise]' \
+          '--help[Show this message]' \
+          '--jobs[`install` runs up to this many formula installations in parallel. Defaults to 1 (sequential). Use `auto` for the number of CPU cores (max 4)]' \
+          '--no-upgrade[`install` does not run `brew upgrade` on outdated dependencies. `check` does not check for outdated dependencies. Note they may still be upgraded by `brew install` if needed. Enabled by default if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set]' \
+          '--quiet[Make some output more quiet]' \
+          '--upgrade[`install` runs `brew upgrade` on outdated dependencies, even if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set]' \
+          '--upgrade-formulae[`install` runs `brew upgrade` on any of these comma-separated formulae, even if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set]' \
+          '--verbose[`install` prints output from commands as they are run. `check` lists all missing dependencies]'
+        ;;
+exec)
+        _arguments \
+          '--check[Check that all dependencies in the Brewfile are installed before running `exec`, `sh`, or `env`. Enabled by default if `$HOMEBREW_BUNDLE_CHECK` is set]' \
+          '--debug[Display any debugging information]' \
+          '(--global)--file[Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout]' \
+          '(--file)--global[Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise]' \
+          '--help[Show this message]' \
+          '--install[Run `install` before continuing to other operations, e.g. `exec`]' \
+          '--no-secrets[Attempt to remove secrets from the environment before `exec`, `sh`, or `env`. Enabled by default if `$HOMEBREW_BUNDLE_NO_SECRETS` is set]' \
+          '--quiet[Make some output more quiet]' \
+          '--services[Temporarily start services while running the `exec` or `sh` command. Enabled by default if `$HOMEBREW_BUNDLE_SERVICES` is set]' \
+          - command \
+          '*:command:__brew_commands'
+        ;;
+env)
+        _arguments \
+          '--check[Check that all dependencies in the Brewfile are installed before running `exec`, `sh`, or `env`. Enabled by default if `$HOMEBREW_BUNDLE_CHECK` is set]' \
+          '--debug[Display any debugging information]' \
+          '(--global)--file[Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout]' \
+          '(--file)--global[Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise]' \
+          '--help[Show this message]' \
+          '--install[Run `install` before continuing to other operations, e.g. `exec`]' \
+          '--no-secrets[Attempt to remove secrets from the environment before `exec`, `sh`, or `env`. Enabled by default if `$HOMEBREW_BUNDLE_NO_SECRETS` is set]' \
+          '--quiet[Make some output more quiet]'
+        ;;
+edit)
+        _arguments \
+          '--debug[Display any debugging information]' \
+          '(--global)--file[Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout]' \
+          '(--file)--global[Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise]' \
+          '--help[Show this message]' \
+          '--install[Run `install` before continuing to other operations, e.g. `exec`]' \
+          '--quiet[Make some output more quiet]'
+        ;;
+dump)
+        _arguments \
+          '(--no-cargo)--cargo[`list`, `dump` or `cleanup` Cargo packages]' \
+          '--cask[Add Homebrew cask entries]' \
+          '--debug[Display any debugging information]' \
+          '--describe[`dump` and `add` add a description comment above each line, unless the dependency does not have a description. Enabled by default if `$HOMEBREW_BUNDLE_DESCRIBE` is set]' \
+          '(--global)--file[Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout]' \
+          '(--no-flatpak)--flatpak[`list`, `dump` or `cleanup` Flatpak packages. Note: Linux only]' \
+          '--force[`install` runs with `--force`/`--overwrite`. `dump` overwrites an existing `Brewfile`. `cleanup` actually performs its cleanup operations]' \
+          '--formula[Add Homebrew formula entries]' \
+          '(--file)--global[Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise]' \
+          '(--no-go)--go[`list`, `dump` or `cleanup` Go packages]' \
+          '--help[Show this message]' \
+          '--install[Run `install` before continuing to other operations, e.g. `exec`]' \
+          '(--no-krew)--krew[`list` or `dump` Krew plugins]' \
+          '--mas[`list` or `dump` Mac App Store dependencies]' \
+          '(--cargo)--no-cargo[`dump` without Cargo packages. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_CARGO` is set]' \
+          '(--flatpak)--no-flatpak[`dump` without Flatpak packages. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_FLATPAK` is set]' \
+          '(--go)--no-go[`dump` without Go packages. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_GO` is set]' \
+          '(--krew)--no-krew[`dump` without Krew plugins. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_KREW` is set]' \
+          '(--npm)--no-npm[`dump` without npm packages. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_NPM` is set]' \
+          '--no-restart[`dump` does not add `restart_service` to formula lines]' \
+          '(--uv)--no-uv[`dump` without uv tools. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_UV` is set]' \
+          '(--vscode)--no-vscode[`dump` without VSCode (and forks/variants) extensions. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_VSCODE` is set]' \
+          '(--no-npm)--npm[`list`, `dump` or `cleanup` npm packages]' \
+          '--quiet[Make some output more quiet]' \
+          '--tap[Add Homebrew tap entries]' \
+          '(--no-uv)--uv[`list`, `dump` or `cleanup` uv tools]' \
+          '(--no-vscode)--vscode[`list`, `dump` or `cleanup` VSCode (and forks/variants) extensions]'
+        ;;
+cleanup)
+        _arguments \
+          '(--no-cargo)--cargo[`list`, `dump` or `cleanup` Cargo packages]' \
+          '--cask[Add Homebrew cask entries]' \
+          '--debug[Display any debugging information]' \
+          '(--global)--file[Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout]' \
+          '(--no-flatpak)--flatpak[`list`, `dump` or `cleanup` Flatpak packages. Note: Linux only]' \
+          '--force[`install` runs with `--force`/`--overwrite`. `dump` overwrites an existing `Brewfile`. `cleanup` actually performs its cleanup operations]' \
+          '--formula[Add Homebrew formula entries]' \
+          '(--file)--global[Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise]' \
+          '(--no-go)--go[`list`, `dump` or `cleanup` Go packages]' \
+          '--help[Show this message]' \
+          '--install[Run `install` before continuing to other operations, e.g. `exec`]' \
+          '(--no-npm)--npm[`list`, `dump` or `cleanup` npm packages]' \
+          '--quiet[Make some output more quiet]' \
+          '--tap[Add Homebrew tap entries]' \
+          '(--no-uv)--uv[`list`, `dump` or `cleanup` uv tools]' \
+          '(--no-vscode)--vscode[`list`, `dump` or `cleanup` VSCode (and forks/variants) extensions]' \
+          '--zap[`cleanup` casks using the `zap` command instead of `uninstall`]'
+        ;;
+check)
+        _arguments \
+          '--debug[Display any debugging information]' \
+          '(--global)--file[Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout]' \
+          '(--file)--global[Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise]' \
+          '--help[Show this message]' \
+          '--install[Run `install` before continuing to other operations, e.g. `exec`]' \
+          '--no-upgrade[`install` does not run `brew upgrade` on outdated dependencies. `check` does not check for outdated dependencies. Note they may still be upgraded by `brew install` if needed. Enabled by default if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set]' \
+          '--quiet[Make some output more quiet]' \
+          '--verbose[`install` prints output from commands as they are run. `check` lists all missing dependencies]'
+        ;;
+add)
+        _arguments \
+          '(--no-cargo)--cargo[`list`, `dump` or `cleanup` Cargo packages]' \
+          '--cask[Add Homebrew cask entries]' \
+          '--debug[Display any debugging information]' \
+          '--describe[`dump` and `add` add a description comment above each line, unless the dependency does not have a description. Enabled by default if `$HOMEBREW_BUNDLE_DESCRIBE` is set]' \
+          '(--global)--file[Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout]' \
+          '(--no-flatpak)--flatpak[`list`, `dump` or `cleanup` Flatpak packages. Note: Linux only]' \
+          '--formula[Add Homebrew formula entries]' \
+          '(--file)--global[Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise]' \
+          '(--no-go)--go[`list`, `dump` or `cleanup` Go packages]' \
+          '--help[Show this message]' \
+          '--install[Run `install` before continuing to other operations, e.g. `exec`]' \
+          '(--no-krew)--krew[`list` or `dump` Krew plugins]' \
+          '(--no-npm)--npm[`list`, `dump` or `cleanup` npm packages]' \
+          '--quiet[Make some output more quiet]' \
+          '--tap[Add Homebrew tap entries]' \
+          '(--no-uv)--uv[`list`, `dump` or `cleanup` uv tools]' \
+          '(--no-vscode)--vscode[`list`, `dump` or `cleanup` VSCode (and forks/variants) extensions]'
+        ;;
+        *) ;;
+      esac
+      ;;
+  esac
 }
 
 # brew casks
@@ -1968,20 +2152,141 @@ _brew_search() {
 
 # brew services
 _brew_services() {
-  _arguments \
-    '(--file)--all[Run subcommand on all services]' \
-    '--debug[Display any debugging information]' \
-    '(--all)--file[Use the service file from this location to `start` the service]' \
-    '--help[Show this message]' \
-    '--json[Output as JSON]' \
-    '--keep[When stopped, don'\''t unregister the service from launching at login (or boot)]' \
-    '(--no-wait)--max-wait[Wait at most this many seconds for `stop` to finish stopping a service. Defaults to 60. Set this to zero (0) seconds to wait indefinitely]' \
-    '(--max-wait)--no-wait[Don'\''t wait for `stop` to finish stopping the service]' \
-    '--quiet[Make some output more quiet]' \
-    '--sudo-service-user[When run as root on macOS, run the service(s) as this user]' \
-    '--verbose[Make some output more verbose]' \
-    - subcommand \
-    '*:subcommand:(list info run start stop kill restart cleanup)'
+  local state
+  local -a subcommands
+  subcommands=(
+    'stop:Stop the service formula immediately and unregister it from launching at login (or boot),'
+    'unload:Stop the service formula immediately and unregister it from launching at login (or boot),'
+    'terminate:Stop the service formula immediately and unregister it from launching at login (or boot),'
+    'term:Stop the service formula immediately and unregister it from launching at login (or boot),'
+    't:Stop the service formula immediately and unregister it from launching at login (or boot),'
+    'u:Stop the service formula immediately and unregister it from launching at login (or boot),'
+    'start:Start the service formula immediately and register it to launch at login (or boot)'
+    'launch:Start the service formula immediately and register it to launch at login (or boot)'
+    'load:Start the service formula immediately and register it to launch at login (or boot)'
+    's:Start the service formula immediately and register it to launch at login (or boot)'
+    'l:Start the service formula immediately and register it to launch at login (or boot)'
+    'run:Run the service formula without registering to launch at login (or boot)'
+    'restart:Stop (if necessary) and start the service formula immediately and register it to launch at login (or boot)'
+    'relaunch:Stop (if necessary) and start the service formula immediately and register it to launch at login (or boot)'
+    'reload:Stop (if necessary) and start the service formula immediately and register it to launch at login (or boot)'
+    'r:Stop (if necessary) and start the service formula immediately and register it to launch at login (or boot)'
+    'list:List information about all managed services for the current user (or root)'
+    'ls:List information about all managed services for the current user (or root)'
+    'kill:Stop the service formula immediately but keep it registered to launch at login (or boot)'
+    'k:Stop the service formula immediately but keep it registered to launch at login (or boot)'
+    'info:List all managed services for the current user (or root)'
+    'i:List all managed services for the current user (or root)'
+    'cleanup:Remove all unused services'
+    'clean:Remove all unused services'
+    'cl:Remove all unused services'
+    'rm:Remove all unused services'
+  )
+
+  _arguments -C \
+    '1:subcommand:->subcommand' \
+    '*::arg:->args'
+
+  case "$state" in
+    subcommand)
+      _describe -t subcommands 'subcommand' subcommands
+      ;;
+    args)
+      case "$words[2]" in
+stop|unload|terminate|term|t|u)
+        _arguments \
+          '(--file)--all[Run subcommand on all services]' \
+          '--debug[Display any debugging information]' \
+          '--help[Show this message]' \
+          '--keep[When stopped, don'\''t unregister the service from launching at login (or boot)]' \
+          '(--no-wait)--max-wait[Wait at most this many seconds for `stop` to finish stopping a service. Defaults to 60. Set this to zero (0) seconds to wait indefinitely]' \
+          '(--max-wait)--no-wait[Don'\''t wait for `stop` to finish stopping the service]' \
+          '--quiet[Make some output more quiet]' \
+          '--sudo-service-user[When run as root on macOS, run the service(s) as this user]' \
+          '--verbose[Make some output more verbose]' \
+          - service \
+          '*:service:__brew_services'
+        ;;
+start|launch|load|s|l)
+        _arguments \
+          '(--file)--all[Run subcommand on all services]' \
+          '--debug[Display any debugging information]' \
+          '(--all)--file[Use the service file from this location to `start` the service]' \
+          '--help[Show this message]' \
+          '--quiet[Make some output more quiet]' \
+          '--sudo-service-user[When run as root on macOS, run the service(s) as this user]' \
+          '--verbose[Make some output more verbose]' \
+          - service \
+          '*:service:__brew_services'
+        ;;
+run)
+        _arguments \
+          '(--file)--all[Run subcommand on all services]' \
+          '--debug[Display any debugging information]' \
+          '(--all)--file[Use the service file from this location to `start` the service]' \
+          '--help[Show this message]' \
+          '--quiet[Make some output more quiet]' \
+          '--sudo-service-user[When run as root on macOS, run the service(s) as this user]' \
+          '--verbose[Make some output more verbose]' \
+          - service \
+          '*:service:__brew_services'
+        ;;
+restart|relaunch|reload|r)
+        _arguments \
+          '(--file)--all[Run subcommand on all services]' \
+          '--debug[Display any debugging information]' \
+          '(--all)--file[Use the service file from this location to `start` the service]' \
+          '--help[Show this message]' \
+          '--quiet[Make some output more quiet]' \
+          '--sudo-service-user[When run as root on macOS, run the service(s) as this user]' \
+          '--verbose[Make some output more verbose]' \
+          - service \
+          '*:service:__brew_services'
+        ;;
+list|ls)
+        _arguments \
+          '--debug[Display any debugging information]' \
+          '--help[Show this message]' \
+          '--json[Output as JSON]' \
+          '--quiet[Make some output more quiet]' \
+          '--sudo-service-user[When run as root on macOS, run the service(s) as this user]' \
+          '--verbose[Make some output more verbose]'
+        ;;
+kill|k)
+        _arguments \
+          '(--file)--all[Run subcommand on all services]' \
+          '--debug[Display any debugging information]' \
+          '--help[Show this message]' \
+          '--quiet[Make some output more quiet]' \
+          '--sudo-service-user[When run as root on macOS, run the service(s) as this user]' \
+          '--verbose[Make some output more verbose]' \
+          - service \
+          '*:service:__brew_services'
+        ;;
+info|i)
+        _arguments \
+          '(--file)--all[Run subcommand on all services]' \
+          '--debug[Display any debugging information]' \
+          '--help[Show this message]' \
+          '--json[Output as JSON]' \
+          '--quiet[Make some output more quiet]' \
+          '--sudo-service-user[When run as root on macOS, run the service(s) as this user]' \
+          '--verbose[Make some output more verbose]' \
+          - service \
+          '*:service:__brew_services'
+        ;;
+cleanup|clean|cl|rm)
+        _arguments \
+          '--debug[Display any debugging information]' \
+          '--help[Show this message]' \
+          '--quiet[Make some output more quiet]' \
+          '--sudo-service-user[When run as root on macOS, run the service(s) as this user]' \
+          '--verbose[Make some output more verbose]'
+        ;;
+        *) ;;
+      esac
+      ;;
+  esac
 }
 
 # brew setup-ruby

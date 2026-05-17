@@ -2,10 +2,10 @@
 # frozen_string_literal: true
 
 require "bundle"
-require "bundle/commands/cleanup"
+require "bundle/subcommand/cleanup"
 require "utils"
 
-RSpec.describe Homebrew::Bundle::Commands::Cleanup do
+RSpec.describe Homebrew::Cmd::Bundle::CleanupSubcommand do
   describe "read Brewfile and current installation", :no_api do
     before do
       described_class.reset!
@@ -35,7 +35,7 @@ RSpec.describe Homebrew::Bundle::Commands::Cleanup do
          homebrew/tap/hasdependency hasbuilddependency1 hasbuilddependency2].each do |full_name|
         tap_name = Utils.tap_from_full_name(full_name)
         name = Utils.name_from_full_name(full_name)
-        tap = tap_name.present? ? Tap.fetch(tap_name) : nil
+        tap = (Tap.fetch(tap_name) if tap_name.present?)
         f = formula(name, tap:) { url "#{name}-1.0" }
         stub_formula_loader f, full_name
       end
@@ -197,7 +197,7 @@ RSpec.describe Homebrew::Bundle::Commands::Cleanup do
     it "does nothing" do
       expect(Kernel).not_to receive(:system)
       expect(described_class).to receive(:system_output_no_stderr).and_return("")
-      described_class.run(force: true)
+      described_class.cleanup(force: true)
     end
   end
 
@@ -214,13 +214,13 @@ RSpec.describe Homebrew::Bundle::Commands::Cleanup do
     it "uninstalls casks" do
       expect(Kernel).to receive(:system).with(HOMEBREW_BREW_FILE, "uninstall", "--cask", "--force", "a", "b")
       expect(described_class).to receive(:system_output_no_stderr).and_return("")
-      expect { described_class.run(force: true) }.to output(/Uninstalled 2 casks/).to_stdout
+      expect { described_class.cleanup(force: true) }.to output(/Uninstalled 2 casks/).to_stdout
     end
 
     it "does not uninstall casks if --formulae is disabled" do
       expect(Kernel).not_to receive(:system)
       expect(described_class).to receive(:system_output_no_stderr).and_return("")
-      expect { described_class.run(force: true, casks: false) }.not_to output.to_stdout
+      expect { described_class.cleanup(force: true, casks: false) }.not_to output.to_stdout
     end
   end
 
@@ -237,13 +237,13 @@ RSpec.describe Homebrew::Bundle::Commands::Cleanup do
     it "uninstalls casks" do
       expect(Kernel).to receive(:system).with(HOMEBREW_BREW_FILE, "uninstall", "--cask", "--zap", "--force", "a", "b")
       expect(described_class).to receive(:system_output_no_stderr).and_return("")
-      expect { described_class.run(force: true, zap: true) }.to output(/Uninstalled 2 casks/).to_stdout
+      expect { described_class.cleanup(force: true, zap: true) }.to output(/Uninstalled 2 casks/).to_stdout
     end
 
     it "does not uninstall casks if --casks is disabled" do
       expect(Kernel).not_to receive(:system)
       expect(described_class).to receive(:system_output_no_stderr).and_return("")
-      expect { described_class.run(force: true, zap: true, casks: false) }.not_to output.to_stdout
+      expect { described_class.cleanup(force: true, zap: true, casks: false) }.not_to output.to_stdout
     end
   end
 
@@ -261,13 +261,13 @@ RSpec.describe Homebrew::Bundle::Commands::Cleanup do
     it "uninstalls formulae" do
       expect(Kernel).to receive(:system).with(HOMEBREW_BREW_FILE, "uninstall", "--formula", "--force", "a", "b")
       expect(described_class).to receive(:system_output_no_stderr).and_return("")
-      expect { described_class.run(force: true) }.to output(/Uninstalled 2 formulae/).to_stdout
+      expect { described_class.cleanup(force: true) }.to output(/Uninstalled 2 formulae/).to_stdout
     end
 
     it "does not uninstall formulae if --casks is disabled" do
       expect(Kernel).not_to receive(:system)
       expect(described_class).to receive(:system_output_no_stderr).and_return("")
-      expect { described_class.run(force: true, formulae: false) }.not_to output.to_stdout
+      expect { described_class.cleanup(force: true, formulae: false) }.not_to output.to_stdout
     end
   end
 
@@ -284,13 +284,13 @@ RSpec.describe Homebrew::Bundle::Commands::Cleanup do
     it "untaps taps" do
       expect(Kernel).to receive(:system).with(HOMEBREW_BREW_FILE, "untap", "a", "b")
       expect(described_class).to receive(:system_output_no_stderr).and_return("")
-      described_class.run(force: true)
+      described_class.cleanup(force: true)
     end
 
     it "does not untap taps if --taps is disabled" do
       expect(Kernel).not_to receive(:system)
       expect(described_class).to receive(:system_output_no_stderr).and_return("")
-      described_class.run(force: true, taps: false)
+      described_class.cleanup(force: true, taps: false)
     end
   end
 
@@ -307,13 +307,13 @@ RSpec.describe Homebrew::Bundle::Commands::Cleanup do
     it "uninstalls extensions" do
       expect(Kernel).to receive(:system).with("code", "--uninstall-extension", "GitHub.codespaces")
       expect(described_class).to receive(:system_output_no_stderr).and_return("")
-      described_class.run(force: true)
+      described_class.cleanup(force: true)
     end
 
     it "does not uninstall extensions if --vscode is disabled" do
       expect(Kernel).not_to receive(:system)
       expect(described_class).to receive(:system_output_no_stderr).and_return("")
-      described_class.run(force: true, extension_types: { vscode: false })
+      described_class.cleanup(force: true, extension_types: { vscode: false })
     end
   end
 
@@ -329,13 +329,13 @@ RSpec.describe Homebrew::Bundle::Commands::Cleanup do
     it "uninstalls flatpaks" do
       expect(Kernel).to receive(:system).with("flatpak", "uninstall", "-y", "--system", "org.gnome.Calculator")
       expect(described_class).to receive(:system_output_no_stderr).and_return("")
-      expect { described_class.run(force: true) }.to output(/Uninstalled 1 flatpak/).to_stdout
+      expect { described_class.cleanup(force: true) }.to output(/Uninstalled 1 flatpak/).to_stdout
     end
 
     it "does not uninstall flatpaks if --flatpak is disabled" do
       expect(Kernel).not_to receive(:system)
       expect(described_class).to receive(:system_output_no_stderr).and_return("")
-      described_class.run(force: true, extension_types: { flatpak: false })
+      described_class.cleanup(force: true, extension_types: { flatpak: false })
     end
   end
 
@@ -360,7 +360,7 @@ RSpec.describe Homebrew::Bundle::Commands::Cleanup do
         Regexp::MULTILINE,
       )
       expect do
-        described_class.run
+        described_class.cleanup
       end.to raise_error(SystemExit)
         .and output(output_pattern).to_stdout
     end
@@ -382,14 +382,14 @@ RSpec.describe Homebrew::Bundle::Commands::Cleanup do
     context "with --force" do
       it "prints output" do
         sane?
-        expect { described_class.run(force: true) }.to output(/cleaned/).to_stdout
+        expect { described_class.cleanup(force: true) }.to output(/cleaned/).to_stdout
       end
     end
 
     context "without --force" do
       it "prints output" do
         sane?
-        expect { described_class.run }.to output(/cleaned/).to_stdout
+        expect { described_class.cleanup }.to output(/cleaned/).to_stdout
       end
     end
   end
@@ -418,7 +418,7 @@ RSpec.describe Homebrew::Bundle::Commands::Cleanup do
 
     it "marks Brewfile formulae as installed_on_request before uninstalling" do
       expect(Homebrew::Bundle).to receive(:mark_as_installed_on_request!)
-      described_class.run(force: true)
+      described_class.cleanup(force: true)
     end
   end
 end

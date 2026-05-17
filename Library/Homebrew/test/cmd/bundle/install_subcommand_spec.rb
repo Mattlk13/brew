@@ -2,10 +2,19 @@
 # frozen_string_literal: true
 
 require "bundle"
-require "bundle/commands/install"
+require "bundle/subcommand/install"
 require "bundle/skipper"
 
-RSpec.describe Homebrew::Bundle::Commands::Install do
+RSpec.describe Homebrew::Cmd::Bundle::InstallSubcommand do
+  subject(:install_subcommand) do
+    described_class.new(
+      args_for_subcommand(:install, quiet?: false, global?: global, cleanup?: false),
+      context: bundle_subcommand_context(:install, global:),
+    )
+  end
+
+  let(:global) { false }
+
   before do
     allow_any_instance_of(IO).to receive(:puts)
   end
@@ -13,7 +22,7 @@ RSpec.describe Homebrew::Bundle::Commands::Install do
   context "when a Brewfile is not found" do
     it "raises an error" do
       allow_any_instance_of(Pathname).to receive(:read).and_raise(Errno::ENOENT)
-      expect { described_class.run }.to raise_error(RuntimeError)
+      expect { install_subcommand.run }.to raise_error(RuntimeError)
     end
   end
 
@@ -45,7 +54,7 @@ RSpec.describe Homebrew::Bundle::Commands::Install do
       allow(Homebrew::Bundle::Cask).to receive_messages(preinstall!: true, install!: true)
       allow(Homebrew::Bundle::MacAppStore).to receive_messages(preinstall!: true, install!: true)
       allow_any_instance_of(Pathname).to receive(:read).and_return(brewfile_contents)
-      expect { described_class.run }.not_to raise_error
+      expect { install_subcommand.run }.not_to raise_error
     end
 
     it "#dsl returns a valid DSL" do
@@ -56,8 +65,8 @@ RSpec.describe Homebrew::Bundle::Commands::Install do
       allow(Homebrew::Bundle::Cask).to receive_messages(preinstall!: true, install!: true)
       allow(Homebrew::Bundle::MacAppStore).to receive_messages(preinstall!: true, install!: true)
       allow_any_instance_of(Pathname).to receive(:read).and_return(brewfile_contents)
-      described_class.run
-      expect(described_class.dsl.entries.first.name).to eql("phinze/cask")
+      install_subcommand.run
+      expect(install_subcommand.dsl.entries.first.name).to eql("phinze/cask")
     end
 
     it "does not raise an error when skippable" do
@@ -66,7 +75,7 @@ RSpec.describe Homebrew::Bundle::Commands::Install do
       allow(Homebrew::Bundle::Skipper).to receive(:skip?).and_return(true)
       allow_any_instance_of(Pathname).to receive(:read)
         .and_return("brew 'mysql'")
-      expect { described_class.run }.not_to raise_error
+      expect { install_subcommand.run }.not_to raise_error
     end
 
     it "exits on failures" do
@@ -78,7 +87,7 @@ RSpec.describe Homebrew::Bundle::Commands::Install do
       allow(Homebrew::Bundle::Flatpak).to receive_messages(preinstall!: true, install!: false)
       allow_any_instance_of(Pathname).to receive(:read).and_return(brewfile_contents)
 
-      expect { described_class.run }.to raise_error(SystemExit)
+      expect { install_subcommand.run }.to raise_error(SystemExit)
     end
 
     it "skips installs from failed taps" do
@@ -90,7 +99,7 @@ RSpec.describe Homebrew::Bundle::Commands::Install do
       allow(Homebrew::Bundle::Flatpak).to receive_messages(preinstall!: true, install!: true)
       allow_any_instance_of(Pathname).to receive(:read).and_return(brewfile_contents)
 
-      expect { described_class.run }.to raise_error(SystemExit)
+      expect { install_subcommand.run }.to raise_error(SystemExit)
     end
 
     it "marks Brewfile formulae as installed_on_request after installing" do
@@ -103,7 +112,7 @@ RSpec.describe Homebrew::Bundle::Commands::Install do
       allow_any_instance_of(Pathname).to receive(:read).and_return("brew 'test_formula'")
 
       expect(Homebrew::Bundle).to receive(:mark_as_installed_on_request!)
-      described_class.run
+      install_subcommand.run
     end
   end
 end
