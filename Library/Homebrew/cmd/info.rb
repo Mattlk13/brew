@@ -780,12 +780,15 @@ module Homebrew
             *heads.sort_by { |keg| -keg.tab.time.to_i },
             *versioned.sort_by(&:scheme_and_version).reverse,
           ]
-          ordered_kegs.map { |keg| [other, keg] }
+          ordered_kegs.each_with_index.map { |keg, index| [other, keg, index.zero?] }
         end
-        rows = with_kegs.map do |other, keg|
+        rows = with_kegs.map do |other, keg, newest|
           name_status = pretty_install_status(other.full_name, installed: true, outdated: other.outdated?)
+          version = keg.version.to_s
+          latest = other.pkg_version.to_s
+          version = "#{version} → #{latest}" if newest && other.outdated? && latest != version
           linked_marker = keg.linked? ? "[Linked]" : ""
-          [name_status, keg.version.to_s, "(#{keg.abv})", linked_marker, keg]
+          [name_status, version, "(#{keg.abv})", linked_marker, keg]
         end
         name_width = rows.map { |r| Tty.strip_ansi(r[0]).length }.max || 0
         version_width = rows.map { |r| r[1].length }.max || 0

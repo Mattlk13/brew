@@ -1115,6 +1115,34 @@ RSpec.describe Homebrew::Cmd::Info do
         .and not_to_output.to_stderr
     end
 
+    it "shows installed → latest only on the newest installed keg of an outdated formula" do
+      info = described_class.new([])
+      main_formula = formula("testball") do
+        url "https://brew.sh/testball-2.0.tar.gz"
+        version "2.0"
+      end
+
+      ["1.0", "0.9"].each do |version|
+        keg_path = HOMEBREW_CELLAR/"testball/#{version}"
+        keg_path.mkpath
+        tab = Tab.empty
+        tab.tabfile = keg_path/AbstractTab::FILENAME
+        tab.write
+      end
+
+      allow(main_formula).to receive_messages(versioned_formulae: [], outdated?: true)
+      allow(info).to receive(:github_info).with(main_formula).and_return("https://example.com/testball.rb")
+
+      expect { info.send(:info_formula, main_formula) }
+        .to output(Regexp.new(
+                     "==> Installed Kegs and Versions\n" \
+                     ".*testball\\b.*\\s+1\\.0 → 2\\.0\\s+\\(.*\\)\n" \
+                     ".*testball\\b.*\\s+0\\.9\\s+\\(",
+                   )).to_stdout
+        .and not_to_output(/0\.9 →/).to_stdout
+        .and not_to_output.to_stderr
+    end
+
     it "marks the currently linked version with `*`" do
       info = described_class.new([])
       main_formula = formula("testball") do
@@ -1249,7 +1277,7 @@ RSpec.describe Homebrew::Cmd::Info do
       expect { info.send(:info_formula, main_formula) }
         .to output(Regexp.new(
                      "==> Installed Kegs and Versions\n" \
-                     ".*testball\\b.*\\s+1\\.0\\s+\\(.*\\)\n" \
+                     ".*testball\\b.*\\s+1\\.0\\b.*\\(.*\\)\n" \
                      ".*testball\\b.*\\s+0\\.10\\s+\\(.*\\)\n" \
                      ".*testball\\b.*\\s+0\\.9\\s+\\(",
                    )).to_stdout
